@@ -6,6 +6,14 @@
 
 **RPG Maker Player** is a SteamOS-focused all-in-one launcher for RPG Maker and WOLF RPG Editor games. It scans one game library folder, detects the engine/runtime, and launches games through the appropriate compatibility layer.
 
+## Screenshots
+
+| Home | Game settings |
+|---|---|
+| ![Home](docs/screenshots/home.jpg) | ![Game settings](docs/screenshots/game-settings-rgss.jpg) |
+| Library list | WOLF settings |
+| ![Library list](docs/screenshots/library-list.jpg) | ![WOLF settings](docs/screenshots/wolf-settings.jpg) |
+
 ## Supported engines
 
 | Engine | Runtime / method | Notes |
