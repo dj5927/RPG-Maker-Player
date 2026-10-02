@@ -23,6 +23,14 @@ The exact modified mkxp-z source used by this project is under `third_party/mkxp
 
 The release uses separate Ruby compatibility builds for Ruby 1.8, 1.9 and 3.1. Project-specific compatibility changes are present directly in the source tree.
 
+The current Ruby 1.9 compatibility path uses a Ruby 1.9.3-p551 non-threaded VM build. The reproducibility helpers used for that path are included under `scripts/ruby19/`:
+
+- `build_ruby19_nothreaded.sh` — creates the Ruby 1.9.3-p551 build with direct threaded-code dispatch disabled.
+- `build_mkxp_ruby19_nothreaded.sh` — builds the matching mkxp-z runtime against that Ruby.
+- `ruby-1.9.pc` — pkg-config metadata for the static non-threaded Ruby build.
+
+`scripts/clear_elf_execstack.py` is also included for the ELF executable-stack compatibility fix used during runtime preparation.
+
 ## MV/MZ compatibility
 
 Runtime launch and JavaScript compatibility helpers live under:

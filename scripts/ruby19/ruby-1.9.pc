@@ -1,0 +1,14 @@
+arch=x86_64-linux
+prefix=/root/mkxp-rubies/1.9.3-p551-nothreaded
+exec_prefix=${prefix}
+bindir=${exec_prefix}/bin
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+ruby_version=1.9.1
+rubyhdrdir=${includedir}/ruby-${ruby_version}
+
+Name: Ruby
+Description: Ruby 1.9.3-p551 non-threaded static runtime for MKXP-Z
+Version: 1.9.3
+Cflags: -I${rubyhdrdir}/${arch} -I${rubyhdrdir}
+Libs: -Wl,--export-dynamic -L${libdir} -lruby-static -lpthread -lrt -ldl -lcrypt -lm
