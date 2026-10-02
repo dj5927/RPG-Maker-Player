@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source and LFS asset
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Verify release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='release-assets/RPG_Maker_Player_SteamOS_WINDOWS_SAFE.tar.gz'
+          EXPECTED='be4893e2e61774b0692da15af317b1300aaad145fdb5d1966d91eecbcc2e7b89'
+          test -f "$FILE"
+          ACTUAL="$(sha256sum "$FILE" | awk '{print $1}')"
+          test "$ACTUAL" = "$EXPECTED"
+          echo "SHA-256 verified: $ACTUAL"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            'release-assets/RPG_Maker_Player_SteamOS_WINDOWS_SAFE.tar.gz' \
+            --title 'RPG Maker Player 1.0' \
+            --notes-file 'RELEASE_NOTES_v1.0.md' \
+            --verify-tag
