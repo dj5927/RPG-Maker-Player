@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=RPG Maker Player
+Comment=Register RPG Maker Player in Steam Gaming Mode
+Exec=bash -c 'D="$(dirname "%k")"; cd "$D" && exec bash "./register_steamos.sh"'
+Icon=applications-games
+Terminal=false
+Categories=Game;
+StartupNotify=true
+

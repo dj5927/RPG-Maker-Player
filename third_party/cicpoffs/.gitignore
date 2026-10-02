@@ -1,0 +1,10 @@
+cicpoffs
+.vscode
+.vscode/**
+packaging/debian.deb
+packaging/arch/pkg
+packaging/arch/src
+packaging/arch/cicpoffs-git-*
+packaging/arch/cicpoffs.tar.zst
+packaging/cicpoffs.tar.zst
+packaging/cicpoffs.deb

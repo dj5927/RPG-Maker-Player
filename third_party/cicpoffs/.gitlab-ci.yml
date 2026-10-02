@@ -1,0 +1,8 @@
+build:
+  stage: build
+  script:
+    - make
+  artifacts:
+    paths:
+      - cicpoffs
+    expire_in: 10 minutes

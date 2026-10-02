@@ -1,0 +1,16 @@
+/build/
+/.cache/
+/logs/
+/cache/
+/config/
+/game/
+*.log
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.a
+*.tar.gz
+.DS_Store
+Thumbs.db
