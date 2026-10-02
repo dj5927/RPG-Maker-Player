@@ -8,9 +8,9 @@
 
 ## 스크린샷
 
-| 홈 화면 | 게임 설정 | WOLF 설정 |
-|---|---|---|
-| ![홈 화면](docs/screenshots/home.jpg) | ![게임 설정](docs/screenshots/game-settings-rgss.jpg) | ![WOLF 설정](docs/screenshots/wolf-settings.jpg) |
+| 게임 설정 | WOLF 설정 |
+|---|---|
+| ![게임 설정](docs/screenshots/game-settings-rgss.jpg) | ![WOLF 설정](docs/screenshots/wolf-settings.jpg) |
 
 ## 지원 엔진
 
