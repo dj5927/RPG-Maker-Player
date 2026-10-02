@@ -6,6 +6,13 @@
 
 **RPG Maker Player** is a SteamOS-focused all-in-one launcher for RPG Maker and WOLF RPG Editor games. It scans one game library folder, detects the engine/runtime, and launches games through the appropriate compatibility layer.
 
+## What's new in v1.1
+
+- Proton fallback mode for XP / VX / VX Ace / MV / MZ, including per-game Proton selection.
+- Proton environment presets and custom `KEY=VALUE` overrides, including WineD3D compatibility options.
+- Unified scrollable per-game settings layout across supported engines.
+- Smoother Home navigation: Down from My Library opens the full Library, and B opens/focuses the sidebar menu.
+
 ## Screenshots
 
 | Home | Game settings |
@@ -38,8 +45,8 @@ The launcher detects Steam / desktop / system locale information. Per-game local
 
 ## Installation on SteamOS
 
-1. Download **`RPG_Maker_Player_SteamOS_WINDOWS_SAFE.tar.gz`** from the v1.0 Release.
-2. Extract it. Extraction on Windows is supported; the v1.0 Windows-safe package contains no Linux symlinks.
+1. Download **`RPG_Maker_Player_SteamOS_WINDOWS_SAFE.tar.gz`** from the v1.1 Release.
+2. Extract it. Extraction on Windows is supported; the v1.1 Windows-safe package contains no Linux symlinks.
 3. Copy the extracted **`rpg maker player`** folder to your SteamOS device.
 4. Enter **Desktop Mode**.
 5. Run **`RPG Maker Player.desktop`** inside the folder.
@@ -90,7 +97,7 @@ The launcher watches thumbnail changes and reloads replaced PNG files while it i
 |---|---|
 | D-pad / Left Stick | Navigate |
 | A | Select / launch / confirm |
-| B | Back / close / return toward Home |
+| B | Home: open sidebar menu / Elsewhere: back or close |
 | X | Toggle grid/list view in Library |
 | Y | Open search |
 | LB / RB | Previous / next page |

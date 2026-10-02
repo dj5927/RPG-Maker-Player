@@ -759,6 +759,7 @@ struct GameSettingsState {
   bool active = false;
   bool editingName = false;
   int row = 0;
+  int scrollFirstRow = 1;
   GameLocale locale = GameLocale::Korean;
   std::string editText;
   std::string originalName;
@@ -870,6 +871,10 @@ struct UiShellState {
   bool sidebarFocused = false;
   int sidebarIndex = 0;
   float sidebarAnim = 0.0f;
+  bool sectionTransitionActive = false;
+  MainSection sectionTransitionFrom = MainSection::Home;
+  MainSection sectionTransitionTo = MainSection::Home;
+  Uint64 sectionTransitionStartedAt = 0;
   int homeRow = 0;
   std::size_t homeRecentPos = 0;
   std::size_t homeLibraryPos = 0;
@@ -2470,6 +2475,256 @@ std::string wolfProtonLabel(const GameInfo& game) {
   return selected->name;
 }
 
+bool supportsProtonCompatibility(const GameInfo& game) {
+  return isRgssEngine(game.engine) || isWebEngine(game.engine);
+}
+
+fs::path compatibilityModeFile(const GameInfo& game) {
+  return game.path / "mkxp-compat-mode.txt";
+}
+
+std::string readCompatibilityMode(const GameInfo& game) {
+  if (!supportsProtonCompatibility(game)) return "native";
+  std::ifstream in(compatibilityModeFile(game), std::ios::binary);
+  if (!in) return "native";
+  std::string value;
+  std::getline(in, value);
+  while (!value.empty() && (value.back() == '\r' || value.back() == '\n')) value.pop_back();
+  return lowerAsciiCopy(value) == "proton" ? "proton" : "native";
+}
+
+bool writeCompatibilityMode(const GameInfo& game, const std::string& value) {
+  if (!supportsProtonCompatibility(game)) return false;
+  std::ofstream out(compatibilityModeFile(game), std::ios::binary | std::ios::trunc);
+  if (!out) return false;
+  out << (lowerAsciiCopy(value) == "proton" ? "proton" : "native") << '\n';
+  return static_cast<bool>(out);
+}
+
+bool protonCompatibilityEnabled(const GameInfo& game) {
+  return readCompatibilityMode(game) == "proton";
+}
+
+std::string compatibilityModeLabel(const GameInfo& game) {
+  if (protonCompatibilityEnabled(game)) return "Proton";
+  if (isRgssEngine(game.engine)) return uiWord("기본 (mkxp-z)", "Default (mkxp-z)", "標準 (mkxp-z)");
+  if (isWebEngine(game.engine)) return uiWord("기본 (NW.js)", "Default (NW.js)", "標準 (NW.js)");
+  return uiWord("기본", "Default", "標準");
+}
+
+fs::path gameProtonChoiceFile(const GameInfo& game) {
+  return game.path / "mkxp-proton.txt";
+}
+
+std::string readGameProtonChoice(const GameInfo& game) {
+  std::ifstream in(gameProtonChoiceFile(game), std::ios::binary);
+  if (!in) return "experimental";
+  std::string value;
+  std::getline(in, value);
+  while (!value.empty() && (value.back() == '\r' || value.back() == '\n')) value.pop_back();
+  return value.empty() ? "experimental" : value;
+}
+
+bool writeGameProtonChoice(const GameInfo& game, const std::string& value) {
+  std::ofstream out(gameProtonChoiceFile(game), std::ios::binary | std::ios::trunc);
+  if (!out) return false;
+  out << (value.empty() ? "experimental" : value) << '\n';
+  return static_cast<bool>(out);
+}
+
+std::optional<ProtonTool> selectedGameProton(const GameInfo& game) {
+  const std::string wanted = readGameProtonChoice(game);
+  const auto tools = installedProtonTools();
+  for (const auto& tool : tools) if (tool.id == wanted) return tool;
+  for (const auto& tool : tools) if (tool.experimental) return tool;
+  return std::nullopt;
+}
+
+fs::path protonEnvPresetFile(const GameInfo& game) {
+  return game.path / "mkxp-proton-env-preset.txt";
+}
+
+fs::path protonCustomEnvFile(const GameInfo& game) {
+  return game.path / "mkxp-proton-env.txt";
+}
+
+void ensureProtonCustomEnvTemplate(const GameInfo& game) {
+  std::error_code ec;
+  const fs::path path = protonCustomEnvFile(game);
+  if (fs::exists(path, ec)) return;
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) return;
+  out << "# RPG Maker Player - per-game Proton environment variables\n"
+         "# One variable per line: KEY=VALUE\n"
+         "# Lines beginning with # or ; are ignored. Custom values override the selected preset.\n"
+         "# Example: PROTON_USE_WINED3D=1\n";
+}
+
+const std::array<std::string, 5>& protonEnvPresetIds() {
+  static const std::array<std::string, 5> ids{{
+    "default", "wined3d", "nosync", "wined3d-nosync", "software-gl"
+  }};
+  return ids;
+}
+
+std::string readProtonEnvPreset(const GameInfo& game) {
+  std::ifstream in(protonEnvPresetFile(game), std::ios::binary);
+  if (!in) return "default";
+  std::string value;
+  std::getline(in, value);
+  while (!value.empty() && (value.back() == '\r' || value.back() == '\n' || value.back() == ' ' || value.back() == '\t')) value.pop_back();
+  const auto& ids = protonEnvPresetIds();
+  return std::find(ids.begin(), ids.end(), value) != ids.end() ? value : "default";
+}
+
+bool writeProtonEnvPreset(const GameInfo& game, const std::string& value) {
+  const auto& ids = protonEnvPresetIds();
+  const std::string safe = std::find(ids.begin(), ids.end(), value) != ids.end() ? value : "default";
+  std::ofstream out(protonEnvPresetFile(game), std::ios::binary | std::ios::trunc);
+  if (!out) return false;
+  out << safe << '\n';
+  return static_cast<bool>(out);
+}
+
+std::string protonEnvPresetLabel(const GameInfo& game) {
+  const std::string id = readProtonEnvPreset(game);
+  if (id == "wined3d") return "WineD3D (OpenGL)";
+  if (id == "nosync") return uiWord("ESYNC/FSYNC 끄기", "Disable ESYNC/FSYNC", "ESYNC/FSYNC 無効");
+  if (id == "wined3d-nosync") return uiWord("WineD3D + 동기화 끄기", "WineD3D + no sync", "WineD3D + 同期無効");
+  if (id == "software-gl") return uiWord("소프트웨어 OpenGL", "Software OpenGL", "Software OpenGL");
+  return uiWord("기본", "Default", "標準");
+}
+
+std::vector<std::pair<std::string, std::string>> protonEnvPresetValues(const GameInfo& game) {
+  const std::string id = readProtonEnvPreset(game);
+  std::vector<std::pair<std::string, std::string>> vars;
+  if (id == "wined3d" || id == "wined3d-nosync" || id == "software-gl")
+    vars.push_back({"PROTON_USE_WINED3D", "1"});
+  if (id == "nosync" || id == "wined3d-nosync") {
+    vars.push_back({"PROTON_NO_ESYNC", "1"});
+    vars.push_back({"PROTON_NO_FSYNC", "1"});
+  }
+  if (id == "software-gl") vars.push_back({"LIBGL_ALWAYS_SOFTWARE", "1"});
+  return vars;
+}
+
+bool validEnvironmentName(const std::string& key) {
+  if (key.empty()) return false;
+  const unsigned char first = static_cast<unsigned char>(key.front());
+  if (!(std::isalpha(first) || key.front() == '_')) return false;
+  for (char ch : key) {
+    const unsigned char c = static_cast<unsigned char>(ch);
+    if (!(std::isalnum(c) || ch == '_')) return false;
+  }
+  return true;
+}
+
+std::string trimEnvironmentField(std::string value) {
+  auto isSpace = [](unsigned char c) { return std::isspace(c) != 0; };
+  while (!value.empty() && isSpace(static_cast<unsigned char>(value.front()))) value.erase(value.begin());
+  while (!value.empty() && isSpace(static_cast<unsigned char>(value.back()))) value.pop_back();
+  return value;
+}
+
+std::vector<std::pair<std::string, std::string>> readCustomProtonEnvironment(const GameInfo& game) {
+  std::vector<std::pair<std::string, std::string>> vars;
+  std::ifstream in(protonCustomEnvFile(game), std::ios::binary);
+  if (!in) return vars;
+  std::string line;
+  while (vars.size() < 64 && std::getline(in, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    line = trimEnvironmentField(line);
+    if (line.empty() || line.front() == '#' || line.front() == ';') continue;
+    const std::size_t equals = line.find('=');
+    if (equals == std::string::npos) continue;
+    std::string key = trimEnvironmentField(line.substr(0, equals));
+    std::string value = trimEnvironmentField(line.substr(equals + 1));
+    if (!validEnvironmentName(key) || value.size() > 4096) continue;
+    vars.push_back({std::move(key), std::move(value)});
+  }
+  return vars;
+}
+
+std::size_t customProtonEnvironmentCount(const GameInfo& game) {
+  return readCustomProtonEnvironment(game).size();
+}
+
+void applyGameProtonEnvironment(const GameInfo& game, int logFd) {
+#if defined(__linux__)
+  const std::string preset = readProtonEnvPreset(game);
+  if (logFd >= 0) dprintf(logFd, "proton env preset=%s\n", preset.c_str());
+  for (const auto& item : protonEnvPresetValues(game)) {
+    setenv(item.first.c_str(), item.second.c_str(), 1);
+    if (logFd >= 0) dprintf(logFd, "proton env preset %s=%s\n", item.first.c_str(), item.second.c_str());
+  }
+  for (const auto& item : readCustomProtonEnvironment(game)) {
+    setenv(item.first.c_str(), item.second.c_str(), 1);
+    if (logFd >= 0) dprintf(logFd, "proton env custom %s=%s\n", item.first.c_str(), item.second.c_str());
+  }
+#else
+  (void)game; (void)logFd;
+#endif
+}
+
+std::string gameProtonLabel(const GameInfo& game) {
+  const auto selected = selectedGameProton(game);
+  if (!selected) return "Proton Experimental";
+  if (selected->experimental && !selected->installed) {
+    if (gUiLanguage == UiLanguage::Korean) return "Proton Experimental (미설치)";
+    if (gUiLanguage == UiLanguage::Japanese) return "Proton Experimental (未インストール)";
+    return "Proton Experimental (not installed)";
+  }
+  return selected->name;
+}
+
+std::optional<fs::path> findCompatibilityWindowsExecutable(const GameInfo& game) {
+  if (!supportsProtonCompatibility(game)) return std::nullopt;
+  std::error_code ec;
+  if (!fs::is_directory(game.path, ec)) return std::nullopt;
+
+  auto findNamed = [&](const std::string& wanted) -> std::optional<fs::path> {
+    const std::string target = lowerAsciiCopy(wanted);
+    std::error_code iterEc;
+    for (const auto& entry : fs::directory_iterator(game.path, fs::directory_options::skip_permission_denied, iterEc)) {
+      if (iterEc) break;
+      if (!entry.is_regular_file(iterEc)) continue;
+      if (lowerAsciiCopy(entry.path().filename().string()) == target) return entry.path();
+    }
+    return std::nullopt;
+  };
+
+  if (const auto gameExe = findNamed("Game.exe")) return gameExe;
+  if (isWebEngine(game.engine)) {
+    if (const auto nwExe = findNamed("nw.exe")) return nwExe;
+  }
+
+  std::vector<fs::path> candidates;
+  for (const auto& entry : fs::directory_iterator(game.path, fs::directory_options::skip_permission_denied, ec)) {
+    if (ec) break;
+    if (!entry.is_regular_file(ec)) continue;
+    if (lowerAsciiCopy(entry.path().extension().string()) != ".exe") continue;
+    const std::string lower = lowerAsciiCopy(entry.path().filename().string());
+    if (lower == "config.exe" || lower == "setup.exe" || lower == "crashpad_handler.exe" ||
+        lower.rfind("unins", 0) == 0 || lower.find("uninstall") != std::string::npos) continue;
+    candidates.push_back(entry.path());
+  }
+  if (candidates.empty()) return std::nullopt;
+
+  const std::string folderExe = lowerAsciiCopy(game.folderName) + ".exe";
+  std::stable_sort(candidates.begin(), candidates.end(), [&](const fs::path& a, const fs::path& b) {
+    auto score = [&](const fs::path& p) {
+      const std::string name = lowerAsciiCopy(p.filename().string());
+      int value = 0;
+      if (name == folderExe) value += 100;
+      if (name.find("game") != std::string::npos) value += 50;
+      if (name.find("launcher") != std::string::npos) value += 10;
+      return value;
+    };
+    return score(a) > score(b);
+  });
+  return candidates.front();
+}
+
 std::optional<fs::path> findWolfExecutable(const GameInfo& game, bool config) {
   const std::vector<std::string> names = config
     ? std::vector<std::string>{"Config.exe"}
@@ -2673,6 +2928,8 @@ void syncSharedFontsIntoDirectory(const fs::path& launcherRoot, const fs::path& 
 std::string runtimeUiLabel(const GameInfo& game) {
   if (isEasyRpgEngine(game.engine)) return "EasyRPG 0.8.1.1";
   if (isWolfRpgEngine(game.engine)) return wolfProtonLabel(game);
+  if (supportsProtonCompatibility(game) && protonCompatibilityEnabled(game))
+    return std::string("Proton ") + gameProtonLabel(game);
   if (isWebEngine(game.engine)) {
     if (game.nwjsRuntime.empty()) return tr(UiKey::NwjsMissingShort);
     return (nwjsIsManual(game) ? "NWJS " : "NWJS " + std::string(tr(UiKey::AutoPrefix))) + game.nwjsRuntime;
@@ -3504,11 +3761,138 @@ int launchWolfExecutable(const fs::path& launcherRoot, const GameInfo& game, boo
   return -1;
 #endif
 }
+int launchProtonCompatibilityGame(const fs::path& launcherRoot, const GameInfo& game,
+                                  std::string& status, SDL_Window* window,
+                                  SDL_Renderer* renderer, const FontSet& fonts,
+                                  SDL_GameController* controller) {
+#if defined(__linux__)
+  const auto executable = findCompatibilityWindowsExecutable(game);
+  if (!executable) {
+    status = uiWord("Proton으로 실행할 Windows EXE를 찾을 수 없습니다.",
+                    "No Windows executable was found for Proton mode.",
+                    "Proton で実行する Windows EXE が見つかりません。");
+    return -1;
+  }
+
+  auto proton = selectedGameProton(game);
+  if (!proton || !proton->installed || !fs::is_regular_file(proton->path / "proton")) {
+    if (!proton || proton->experimental) {
+      const bool requested = requestProtonExperimentalInstall();
+      status = requested
+        ? uiWord("Proton Experimental 다운로드를 Steam에 요청했습니다. 설치 완료 후 다시 실행하세요.",
+                 "Requested Proton Experimental installation from Steam. Launch again after it finishes.",
+                 "Steam に Proton Experimental のインストールを要求しました。完了後に再実行してください。")
+        : uiWord("Proton Experimental 설치 요청에 실패했습니다. Steam 실행 상태를 확인하세요.",
+                 "Failed to request Proton Experimental installation from Steam.",
+                 "Proton Experimental のインストール要求に失敗しました。");
+      return -2;
+    }
+    status = uiWord("선택한 Proton이 설치되어 있지 않습니다.",
+                    "The selected Proton is not installed.",
+                    "選択した Proton がインストールされていません。");
+    return -1;
+  }
+
+  const fs::path protonScript = proton->path / "proton";
+  const fs::path steamRoot = primarySteamRoot();
+  const std::string key = nwjsCacheKey(game);
+  const fs::path compatData = launcherRoot / "cache/proton" / key / "compatdata";
+  const fs::path exitRequestFile = launcherRoot / "cache/game_exit_request.flag";
+  std::error_code ec;
+  fs::create_directories(compatData, ec);
+  fs::create_directories(exitRequestFile.parent_path(), ec);
+  { std::ofstream clear(exitRequestFile, std::ios::binary | std::ios::trunc); }
+
+  const fs::path portableFontConfig = writePortableFontconfig(launcherRoot, game, "proton");
+  const fs::path protonLogDir = launcherRoot / "logs";
+  bool prefixReady = fs::is_regular_file(compatData / "pfx/system.reg");
+  if (!prefixReady) {
+    runProtonUtility(protonScript, compatData, game.path, steamRoot,
+                     portableFontConfig, protonLogDir,
+                     {"run", "reg.exe", "query", "HKCU\\Software\\Wine"});
+    prefixReady = fs::is_regular_file(compatData / "pfx/system.reg");
+  }
+  if (prefixReady) {
+    const auto bitmapFonts = syncWolfPrefixFonts(launcherRoot, game, compatData);
+    registerWolfBitmapFonts(protonScript, compatData, game, steamRoot,
+                            portableFontConfig, protonLogDir, bitmapFonts);
+  }
+  const pid_t pid = fork();
+  if (pid == 0) {
+    setpgid(0, 0);
+    applyGameLocaleEnvironment(game);
+    const fs::path gameLogPath = launcherRoot / "logs" / ("game_" + game.folderName + "_proton.log");
+    const int gameLogFd = open(gameLogPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (gameLogFd >= 0) {
+      dup2(gameLogFd, STDOUT_FILENO);
+      dup2(gameLogFd, STDERR_FILENO);
+      dprintf(gameLogFd, "launcher game=%s engine=%s mode=proton proton=%s executable=%s compatdata=%s\n",
+              game.folderName.c_str(), engineLabel(game.engine).c_str(), proton->name.c_str(),
+              executable->c_str(), compatData.c_str());
+    }
+
+    const std::string steamRootText = steamRoot.string();
+    const std::string compatDataText = compatData.string();
+    const std::string installPath = game.path.string();
+    const std::string logDir = protonLogDir.string();
+    setenv("STEAM_COMPAT_DATA_PATH", compatDataText.c_str(), 1);
+    setenv("STEAM_COMPAT_INSTALL_PATH", installPath.c_str(), 1);
+    if (!steamRootText.empty()) setenv("STEAM_COMPAT_CLIENT_INSTALL_PATH", steamRootText.c_str(), 1);
+    setenv("STEAM_COMPAT_APP_ID", "0", 0);
+    setenv("SteamAppId", "0", 0);
+    setenv("SteamGameId", "0", 0);
+    setenv("PROTON_LOG", "1", 1);
+    setenv("PROTON_LOG_DIR", logDir.c_str(), 1);
+    setenv("MKXP_LAUNCHER_ENGINE", engineLabel(game.engine).c_str(), 1);
+    setenv("MKXP_PROTON_COMPAT_MODE", "1", 1);
+    setenv("MKXP_EXIT_REQUEST_FILE", exitRequestFile.c_str(), 1);
+    unsetenv("MKXP_CONTROLLER_REMAP_FILE");
+    applyGameProtonEnvironment(game, gameLogFd);
+    if (!portableFontConfig.empty()) {
+      const std::string fontConfigPath = fs::absolute(portableFontConfig).string();
+      const std::string fontConfigDir = fs::absolute(portableFontConfig.parent_path()).string();
+      const std::string globalFontDir = fs::absolute(launcherRoot / "assets/fonts").string();
+      setenv("FONTCONFIG_FILE", fontConfigPath.c_str(), 1);
+      setenv("FONTCONFIG_PATH", fontConfigDir.c_str(), 1);
+      setenv("MKXP_GLOBAL_FONT_DIR", globalFontDir.c_str(), 1);
+    }
+    if (gameLogFd >= 0) close(gameLogFd);
+    if (chdir(game.path.c_str()) != 0) _exit(126);
+    execl(protonScript.c_str(), protonScript.c_str(), "run", executable->c_str(), static_cast<char*>(nullptr));
+    _exit(127);
+  }
+  if (pid < 0) {
+    status = uiWord("Proton 호환 모드 실행 실패: fork 오류", "Proton compatibility launch failed: fork error", "Proton 互換モード起動失敗: fork エラー");
+    return -1;
+  }
+
+  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller, exitRequestFile);
+  terminateWolfCompatProcesses(compatData);
+  if (WIFEXITED(childStatus)) {
+    const int code = WEXITSTATUS(childStatus);
+    status = code == 0 ? tr(UiKey::GameExit0)
+                       : uiWord("Proton 호환 모드 실행 실패. exit=", "Proton compatibility mode failed. exit=", "Proton 互換モード起動失敗. exit=")
+                         + std::to_string(code) + " (logs/game_*_proton.log)";
+    return code;
+  }
+  if (WIFSIGNALED(childStatus)) {
+    status = uiWord("Proton 호환 모드 비정상 종료. signal=", "Proton compatibility mode signal: ", "Proton 互換モード異常終了. signal=") + std::to_string(WTERMSIG(childStatus));
+  } else {
+    status = uiWord("Proton 호환 모드 게임이 비정상 종료되었습니다.", "The Proton compatibility game exited abnormally.", "Proton 互換モードのゲームが異常終了しました。");
+  }
+  return -1;
+#else
+  (void)launcherRoot; (void)game; (void)status; (void)window; (void)renderer; (void)fonts; (void)controller;
+  return -1;
+#endif
+}
 int launchGame(const fs::path& launcherRoot, const GameInfo& game, std::string& status,
                SDL_Window* window, SDL_Renderer* renderer, const FontSet& fonts,
                SDL_GameController* controller) {
   if (isEasyRpgEngine(game.engine)) return launchEasyRpgGame(launcherRoot, game, status, window, renderer, fonts, controller);
   if (isWolfRpgEngine(game.engine)) return launchWolfExecutable(launcherRoot, game, false, status, window, renderer, fonts, controller);
+  if (supportsProtonCompatibility(game) && protonCompatibilityEnabled(game))
+    return launchProtonCompatibilityGame(launcherRoot, game, status, window, renderer, fonts, controller);
   if (isWebEngine(game.engine)) return launchWebGame(launcherRoot, game, status, window, renderer, fonts, controller);
   if (isRgssEngine(game.engine)) return launchRgssGame(launcherRoot, game, status, window, renderer, fonts, controller);
   status = tr(UiKey::UnsupportedGame);
@@ -3987,6 +4371,7 @@ int main(int, char**) {
     gameSettings.active = true;
     gameSettings.editingName = false;
     gameSettings.row = 0;
+    gameSettings.scrollFirstRow = 1;
     gameSettings.locale = loadGameLocale(games[selected]);
     gameSettings.editText.clear();
     gameSettings.originalName.clear();
@@ -4173,6 +4558,71 @@ int main(int, char**) {
         << " key=" << key << " value=" << next << '\n';
     log.flush();
   };
+  auto stepCompatibilityMode = [&](int delta) {
+    if (!gameSettings.active || games.empty() || !supportsProtonCompatibility(games[selected])) return;
+    auto& game = games[selected];
+    const std::array<std::string, 2> choices{{"native", "proton"}};
+    const std::string current = readCompatibilityMode(game);
+    auto it = std::find(choices.begin(), choices.end(), current);
+    int index = it == choices.end() ? 0 : static_cast<int>(std::distance(choices.begin(), it));
+    index = (index + delta) % static_cast<int>(choices.size());
+    if (index < 0) index += static_cast<int>(choices.size());
+    const std::string next = choices[static_cast<std::size_t>(index)];
+    if (!writeCompatibilityMode(game, next)) {
+      status = uiWord("호환성 모드 저장 실패", "Failed to save compatibility mode", "互換モードの保存に失敗しました");
+      return;
+    }
+    if (next == "proton") ensureProtonCustomEnvTemplate(game);
+    status = uiWord("호환성 모드: ", "Compatibility mode: ", "互換モード: ") + compatibilityModeLabel(game);
+    log << "compatibility mode saved | folder=" << game.folderName << " mode=" << next << '\n';
+    log.flush();
+  };
+
+  auto stepGameProton = [&](int delta) {
+    if (!gameSettings.active || games.empty() || !supportsProtonCompatibility(games[selected])) return;
+    auto& game = games[selected];
+    const auto tools = installedProtonTools();
+    if (tools.empty()) return;
+    const std::string current = readGameProtonChoice(game);
+    int index = 0;
+    for (int i = 0; i < static_cast<int>(tools.size()); ++i) {
+      if (tools[static_cast<std::size_t>(i)].id == current) { index = i; break; }
+    }
+    index = (index + delta) % static_cast<int>(tools.size());
+    if (index < 0) index += static_cast<int>(tools.size());
+    const auto& next = tools[static_cast<std::size_t>(index)];
+    if (!writeGameProtonChoice(game, next.id)) {
+      status = uiWord("Proton 설정 저장 실패", "Failed to save Proton setting", "Proton 設定の保存に失敗しました");
+      return;
+    }
+    status = std::string("Proton: ") + gameProtonLabel(game);
+    log << "game proton setting saved | folder=" << game.folderName
+        << " id=" << next.id << " name=" << next.name
+        << " installed=" << (next.installed ? 1 : 0) << '\n';
+    log.flush();
+  };
+
+  auto stepProtonEnvPreset = [&](int delta) {
+    if (!gameSettings.active || games.empty() || !supportsProtonCompatibility(games[selected]) ||
+        !protonCompatibilityEnabled(games[selected])) return;
+    auto& game = games[selected];
+    const auto& ids = protonEnvPresetIds();
+    const std::string current = readProtonEnvPreset(game);
+    auto it = std::find(ids.begin(), ids.end(), current);
+    int index = it == ids.end() ? 0 : static_cast<int>(std::distance(ids.begin(), it));
+    index = (index + delta) % static_cast<int>(ids.size());
+    if (index < 0) index += static_cast<int>(ids.size());
+    const std::string next = ids[static_cast<std::size_t>(index)];
+    if (!writeProtonEnvPreset(game, next)) {
+      status = uiWord("Proton 환경변수 프리셋 저장 실패", "Failed to save Proton environment preset", "Proton 環境変数プリセットの保存に失敗しました");
+      return;
+    }
+    ensureProtonCustomEnvTemplate(game);
+    status = uiWord("Proton 환경변수: ", "Proton environment: ", "Proton 環境変数: ") + protonEnvPresetLabel(game);
+    log << "proton env preset saved | folder=" << game.folderName
+        << " preset=" << next << " custom=" << customProtonEnvironmentCount(game) << '\n';
+    log.flush();
+  };
   auto stepWolfProton = [&](int delta) {
     if (!gameSettings.active || games.empty() || !isWolfRpgEngine(games[selected].engine)) return;
     auto& game = games[selected];
@@ -4233,6 +4683,21 @@ int main(int, char**) {
     }
     if (isWebEngine(game.engine) && gameSettings.row == 2) {
       stepNwjsMode(delta);
+      uiSounds.play(UiSoundKind::Move);
+      return;
+    }
+    if (supportsProtonCompatibility(game) && gameSettings.row == 3) {
+      stepCompatibilityMode(delta);
+      uiSounds.play(UiSoundKind::Move);
+      return;
+    }
+    if (supportsProtonCompatibility(game) && protonCompatibilityEnabled(game) && gameSettings.row == 4) {
+      stepGameProton(delta);
+      uiSounds.play(UiSoundKind::Move);
+      return;
+    }
+    if (supportsProtonCompatibility(game) && protonCompatibilityEnabled(game) && gameSettings.row == 5) {
+      stepProtonEnvPreset(delta);
       uiSounds.play(UiSoundKind::Move);
       return;
     }
@@ -4405,6 +4870,13 @@ int main(int, char**) {
 
   auto openKeyRemap = [&]() {
     if (!gameSettings.active || games.empty() || !isRgssEngine(games[selected].engine)) return;
+    if (protonCompatibilityEnabled(games[selected])) {
+      status = uiWord("Proton 구동 시 MKXP 게임별 키매핑을 사용할 수 없습니다.",
+                      "MKXP per-game mapping is unavailable in Proton mode.",
+                      "Proton モードでは MKXP のゲーム別マッピングを使用できません。");
+      uiSounds.play(UiSoundKind::Boundary);
+      return;
+    }
     keyRemap.active = true;
     keyRemap.stage = 0;
     keyRemap.source = -1;
@@ -4452,8 +4924,8 @@ int main(int, char**) {
 
   auto settingsRowCount = [&]() -> int {
     if (games.empty()) return 0;
-    if (isRgssEngine(games[selected].engine)) return 6;
-    if (isWebEngine(games[selected].engine)) return 5;
+    if (isRgssEngine(games[selected].engine)) return protonCompatibilityEnabled(games[selected]) ? 9 : 7;
+    if (isWebEngine(games[selected].engine)) return protonCompatibilityEnabled(games[selected]) ? 8 : 6;
     if (isEasyRpgEngine(games[selected].engine)) return 7;
     if (isWolfRpgEngine(games[selected].engine)) return 5;
     return 3;
@@ -4461,11 +4933,59 @@ int main(int, char**) {
 
   auto settingsDoneRow = [&]() -> int {
     if (games.empty()) return 0;
-    if (isRgssEngine(games[selected].engine)) return 5;
-    if (isWebEngine(games[selected].engine)) return 4;
+    if (isRgssEngine(games[selected].engine)) return protonCompatibilityEnabled(games[selected]) ? 8 : 6;
+    if (isWebEngine(games[selected].engine)) return protonCompatibilityEnabled(games[selected]) ? 7 : 5;
     if (isEasyRpgEngine(games[selected].engine)) return 6;
     if (isWolfRpgEngine(games[selected].engine)) return 4;
     return 2;
+  };
+
+  constexpr int SETTINGS_VISIBLE_MIDDLE_ROWS = 5;
+  auto clampSettingsScroll = [&]() {
+    const int doneRow = settingsDoneRow();
+    const int middleRows = std::max(0, doneRow - 1);
+    const int maxFirst = std::max(1, middleRows - SETTINGS_VISIBLE_MIDDLE_ROWS + 1);
+    gameSettings.scrollFirstRow = std::clamp(gameSettings.scrollFirstRow, 1, maxFirst);
+  };
+
+  auto ensureSettingsRowVisible = [&]() {
+    clampSettingsScroll();
+    const int doneRow = settingsDoneRow();
+    if (gameSettings.row <= 0) {
+      gameSettings.scrollFirstRow = 1;
+      return;
+    }
+    if (gameSettings.row >= doneRow) return;
+    if (gameSettings.row < gameSettings.scrollFirstRow)
+      gameSettings.scrollFirstRow = gameSettings.row;
+    if (gameSettings.row >= gameSettings.scrollFirstRow + SETTINGS_VISIBLE_MIDDLE_ROWS)
+      gameSettings.scrollFirstRow = gameSettings.row - SETTINGS_VISIBLE_MIDDLE_ROWS + 1;
+    clampSettingsScroll();
+  };
+
+  auto scrollSettingsContent = [&](int delta) {
+    if (!gameSettings.active || games.empty() || delta == 0) return;
+    const int doneRow = settingsDoneRow();
+    const int middleRows = std::max(0, doneRow - 1);
+    const int maxFirst = std::max(1, middleRows - SETTINGS_VISIBLE_MIDDLE_ROWS + 1);
+    if (maxFirst <= 1) {
+      uiSounds.play(UiSoundKind::Boundary);
+      return;
+    }
+    const int before = gameSettings.scrollFirstRow;
+    gameSettings.scrollFirstRow = std::clamp(before + delta, 1, maxFirst);
+    if (gameSettings.scrollFirstRow == before) {
+      uiSounds.play(UiSoundKind::Boundary);
+      return;
+    }
+    if (gameSettings.row > 0 && gameSettings.row < doneRow) {
+      if (gameSettings.row < gameSettings.scrollFirstRow)
+        gameSettings.row = gameSettings.scrollFirstRow;
+      const int lastVisible = gameSettings.scrollFirstRow + SETTINGS_VISIBLE_MIDDLE_ROWS - 1;
+      if (gameSettings.row > lastVisible)
+        gameSettings.row = std::min(lastVisible, doneRow - 1);
+    }
+    uiSounds.play(UiSoundKind::Move);
   };
 
   auto moveSettingsRow = [&](int delta) {
@@ -4474,6 +4994,7 @@ int main(int, char**) {
     if (count <= 0) return;
     gameSettings.row = (gameSettings.row + delta) % count;
     if (gameSettings.row < 0) gameSettings.row += count;
+    ensureSettingsRowVisible();
     uiSounds.play(UiSoundKind::Move);
   };
 
@@ -4492,10 +5013,24 @@ int main(int, char**) {
       return;
     }
     if (isRgssEngine(games[selected].engine) && gameSettings.row == 3) {
+      stepCompatibilityMode(1);
+      return;
+    }
+    if (isRgssEngine(games[selected].engine) && protonCompatibilityEnabled(games[selected]) && gameSettings.row == 4) {
+      stepGameProton(1);
+      return;
+    }
+    if (isRgssEngine(games[selected].engine) && protonCompatibilityEnabled(games[selected]) && gameSettings.row == 5) {
+      stepProtonEnvPreset(1);
+      return;
+    }
+    if (isRgssEngine(games[selected].engine) &&
+        gameSettings.row == (protonCompatibilityEnabled(games[selected]) ? 6 : 4)) {
       runRubyDeepScan();
       return;
     }
-    if (isRgssEngine(games[selected].engine) && gameSettings.row == 4) {
+    if (isRgssEngine(games[selected].engine) &&
+        gameSettings.row == (protonCompatibilityEnabled(games[selected]) ? 7 : 5)) {
       openKeyRemap();
       return;
     }
@@ -4504,6 +5039,19 @@ int main(int, char**) {
       return;
     }
     if (isWebEngine(games[selected].engine) && gameSettings.row == 3) {
+      stepCompatibilityMode(1);
+      return;
+    }
+    if (isWebEngine(games[selected].engine) && protonCompatibilityEnabled(games[selected]) && gameSettings.row == 4) {
+      stepGameProton(1);
+      return;
+    }
+    if (isWebEngine(games[selected].engine) && protonCompatibilityEnabled(games[selected]) && gameSettings.row == 5) {
+      stepProtonEnvPreset(1);
+      return;
+    }
+    if (isWebEngine(games[selected].engine) &&
+        gameSettings.row == (protonCompatibilityEnabled(games[selected]) ? 6 : 4)) {
       runNwjsDeepScan();
       return;
     }
@@ -4624,79 +5172,27 @@ int main(int, char**) {
     }
     if (gameSettings.active) {
       if (gameSettings.editingName) return;
-      const SDL_Rect nameRow{460, 176, 680, 56};
-      const SDL_Rect localeRow{460, 240, 680, 56};
-      const SDL_Rect runtimeRow{460, 304, 680, 56};
-      const SDL_Rect scanRow{460, 368, 680, 56};
-      const SDL_Rect extraRow{460, 432, 680, 56};
-      const SDL_Rect extraRow4{460, 496, 680, 56};
-      const SDL_Rect doneButton{860, isEasyRpgEngine(games[selected].engine) ? 560 : 520, 240, 52};
+      clampSettingsScroll();
+      const SDL_Rect nameRow{460, 176, 680, 52};
+      const SDL_Rect doneButton{860, 468, 240, 42};
       if (pointInRect(x, y, nameRow)) {
         gameSettings.row = 0;
         beginNameEditing();
         return;
       }
-      if (pointInRect(x, y, localeRow)) {
-        gameSettings.row = 1;
-        stepGameLocale(1);
-        return;
-      }
-      if (isRgssEngine(games[selected].engine) && pointInRect(x, y, runtimeRow)) {
-        gameSettings.row = 2;
-        stepRubyMode(1);
-        return;
-      }
-      if (isRgssEngine(games[selected].engine) && pointInRect(x, y, scanRow)) {
-        gameSettings.row = 3;
-        runRubyDeepScan();
-        return;
-      }
-      if (isRgssEngine(games[selected].engine) && pointInRect(x, y, extraRow)) {
-        gameSettings.row = 4;
-        openKeyRemap();
-        return;
-      }
-      if (isWebEngine(games[selected].engine) && pointInRect(x, y, runtimeRow)) {
-        gameSettings.row = 2;
-        stepNwjsMode(1);
-        return;
-      }
-      if (isWebEngine(games[selected].engine) && pointInRect(x, y, scanRow)) {
-        gameSettings.row = 3;
-        runNwjsDeepScan();
-        return;
-      }
-      if (isEasyRpgEngine(games[selected].engine) && pointInRect(x, y, runtimeRow)) {
-        gameSettings.row = 2;
-        stepEasyRpgEncoding(1);
-        return;
-      }
-      if (isEasyRpgEngine(games[selected].engine) && pointInRect(x, y, scanRow)) {
-        gameSettings.row = 3;
-        stepEasyRpgChoice(EasyRpgChoiceKind::Soundfont, 1);
-        return;
-      }
-      if (isEasyRpgEngine(games[selected].engine) && pointInRect(x, y, extraRow)) {
-        gameSettings.row = 4;
-        stepEasyRpgChoice(EasyRpgChoiceKind::Font1, 1);
-        return;
-      }
-      if (isEasyRpgEngine(games[selected].engine) && pointInRect(x, y, extraRow4)) {
-        gameSettings.row = 5;
-        stepEasyRpgChoice(EasyRpgChoiceKind::Font2, 1);
-        return;
-      }
-      if (isWolfRpgEngine(games[selected].engine) && pointInRect(x, y, runtimeRow)) {
-        gameSettings.row = 2;
-        stepWolfProton(1);
-        return;
-      }
-      if (isWolfRpgEngine(games[selected].engine) && pointInRect(x, y, scanRow)) {
-        gameSettings.row = 3;
-        runWolfConfig();
+      const int doneRow = settingsDoneRow();
+      for (int slot = 0; slot < SETTINGS_VISIBLE_MIDDLE_ROWS; ++slot) {
+        const int actualRow = gameSettings.scrollFirstRow + slot;
+        if (actualRow >= doneRow) break;
+        const SDL_Rect rowRect{460, 236 + slot * 44, 680, 40};
+        if (!pointInRect(x, y, rowRect)) continue;
+        gameSettings.row = actualRow;
+        activateSettingsRow();
+        ensureSettingsRowVisible();
         return;
       }
       if (pointInRect(x, y, doneButton)) {
+        gameSettings.row = doneRow;
         closeGameSettings();
         return;
       }
@@ -4755,6 +5251,22 @@ int main(int, char**) {
     if (count > 0) {
       uiShell.homeLibraryPos = std::min(uiShell.homeLibraryPos, count - 1);
       selected = uiShell.homeLibraryPos;
+    }
+  };
+
+  auto startSectionTransition = [&](MainSection target) {
+    if (uiShell.sectionTransitionActive || uiShell.section == target) return;
+    uiShell.sectionTransitionFrom = uiShell.section;
+    uiShell.sectionTransitionTo = target;
+    uiShell.sectionTransitionStartedAt = SDL_GetTicks64();
+    uiShell.sectionTransitionActive = true;
+    uiShell.section = target;
+    if (target == MainSection::Library) {
+      uiShell.sidebarIndex = 1;
+      if (!games.empty()) {
+        uiShell.homeLibraryPos = std::min(uiShell.homeLibraryPos, games.size() - 1);
+        selected = uiShell.homeLibraryPos;
+      }
     }
   };
 
@@ -4826,6 +5338,11 @@ int main(int, char**) {
     const int beforeRow = uiShell.homeRow;
     const std::size_t beforeRecent = uiShell.homeRecentPos;
     const std::size_t beforeLibrary = uiShell.homeLibraryPos;
+    if (dy > 0 && uiShell.homeRow == 1) {
+      startSectionTransition(MainSection::Library);
+      uiSounds.play(UiSoundKind::Move);
+      return;
+    }
     if (games.empty()) {
       if (dx < 0) uiShell.sidebarFocused = true;
       if (!beforeSidebar && uiShell.sidebarFocused) uiSounds.play(UiSoundKind::SidebarIn);
@@ -4859,6 +5376,7 @@ int main(int, char**) {
     else uiSounds.play(UiSoundKind::Boundary);
   };
   auto moveByDirection = [&](int dx, int dy) {
+    if (uiShell.sectionTransitionActive) return;
     if (keyRemap.active || search.active || gameSettings.editingName) return;
     if (filterSort.active) {
       if (dy < 0) moveFilterSortRow(-1);
@@ -4943,7 +5461,8 @@ int main(int, char**) {
     }
     if (games.empty() || folderPicker.active || gameSettings.active || filterSort.active || search.active) return;
     SDL_HideWindow(window);
-    if (isRgssEngine(games[selected].engine) && games[selected].rubyDetectionSource == "deferred:auto") {
+    if (isRgssEngine(games[selected].engine) && !protonCompatibilityEnabled(games[selected]) &&
+        games[selected].rubyDetectionSource == "deferred:auto") {
       auto& game = games[selected];
       game.rubyRuntime = detectRubyRuntime(root, game, game.rubyDetectionSource);
       for (auto& source : allGames) {
@@ -5470,7 +5989,10 @@ int main(int, char**) {
     };
     std::vector<HintItem> hints;
     hints.push_back({"A", UI_GREEN, uiWord("선택", "Select", "選択")});
-    hints.push_back({"B", UI_RED, uiWord("뒤로", "Back", "戻る")});
+    hints.push_back({"B", UI_RED,
+                     uiShell.section == MainSection::Home && !uiShell.sidebarFocused
+                       ? uiWord("메뉴", "Menu", "メニュー")
+                       : uiWord("뒤로", "Back", "戻る")});
     if (uiShell.section == MainSection::Library)
       hints.push_back({"X", UI_BLUE, uiWord("보기", "View", "表示")});
     hints.push_back({"Y", UI_YELLOW, uiWord("검색", "Search", "検索")});
@@ -5625,6 +6147,9 @@ int main(int, char**) {
         else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_B) cancelNameEditing();
       } else if (gameSettings.editingName && event.type == SDL_CONTROLLERBUTTONUP) {
         // Name editor owns controller input while text input is active.
+      } else if (gameSettings.active && event.type == SDL_MOUSEWHEEL) {
+        if (event.wheel.y > 0) scrollSettingsContent(-1);
+        if (event.wheel.y < 0) scrollSettingsContent(1);
       } else if (gameSettings.active && event.type == SDL_KEYDOWN && event.key.repeat == 0) {
         switch (event.key.keysym.sym) {
           case SDLK_UP: moveSettingsRow(-1); break;
@@ -5731,6 +6256,10 @@ int main(int, char**) {
               uiShell.settingsDetailFocused = false;
               uiShell.homeRow = homeRecentIndices().empty() ? 1 : 0;
               syncHomeSelected();
+            } else {
+              uiShell.sidebarIndex = 0;
+              uiShell.sidebarFocused = true;
+              uiSounds.play(UiSoundKind::SidebarIn);
             }
             break;
           case SDL_CONTROLLER_BUTTON_X:
@@ -5870,11 +6399,35 @@ int main(int, char**) {
     }
 
     SDL_Rect uiViewport{0, displayLayout.uiOffsetY, WIDTH, HEIGHT};
-    SDL_RenderSetViewport(renderer, &uiViewport);
-    if (uiShell.section == MainSection::Home) drawHome();
-    else if (uiShell.section == MainSection::Library) drawLibrary();
-    else drawSettingsScreen();
+    if (uiShell.sectionTransitionActive &&
+        uiShell.sectionTransitionFrom == MainSection::Home &&
+        uiShell.sectionTransitionTo == MainSection::Library) {
+      constexpr float SECTION_TRANSITION_MS = 260.0f;
+      const float raw = std::clamp(
+        static_cast<float>(now - uiShell.sectionTransitionStartedAt) / SECTION_TRANSITION_MS,
+        0.0f, 1.0f);
+      const float inv = 1.0f - raw;
+      const float eased = 1.0f - inv * inv * inv;
+      const int slideY = static_cast<int>(std::lround(eased * static_cast<float>(HEIGHT)));
 
+      SDL_Rect homeViewport{0, displayLayout.uiOffsetY - slideY, WIDTH, HEIGHT};
+      SDL_RenderSetViewport(renderer, &homeViewport);
+      drawHome();
+
+      SDL_Rect libraryViewport{0, displayLayout.uiOffsetY + HEIGHT - slideY, WIDTH, HEIGHT};
+      SDL_RenderSetViewport(renderer, &libraryViewport);
+      drawLibrary();
+
+      if (raw >= 1.0f) uiShell.sectionTransitionActive = false;
+    } else {
+      uiShell.sectionTransitionActive = false;
+      SDL_RenderSetViewport(renderer, &uiViewport);
+      if (uiShell.section == MainSection::Home) drawHome();
+      else if (uiShell.section == MainSection::Library) drawLibrary();
+      else drawSettingsScreen();
+    }
+
+    SDL_RenderSetViewport(renderer, &uiViewport);
     drawSidebar();
     drawBottomHints();
 
@@ -6046,7 +6599,7 @@ int main(int, char**) {
       const GameInfo& game = games[selected];
       const SDL_Rect panel{88, 68, 1104, 570};
       const SDL_Rect gamePanel{108, 88, 310, 530};
-      const SDL_Rect settingsPanel{438, 88, 734, 580};
+      const SDL_Rect settingsPanel{438, 88, 734, 530};
 
       fillRoundedRect(renderer, panel, 24, SDL_Color{5, 20, 36, 202});
       strokeRoundedRect(renderer, panel, 24, SDL_Color{105, 171, 214, 70}, 1);
@@ -6113,7 +6666,7 @@ int main(int, char**) {
         }
       };
 
-      const SDL_Rect nameRow{460, 176, 680, 56};
+      const SDL_Rect nameRow{460, 176, 680, 52};
       const bool nameActive = gameSettings.row == 0 || gameSettings.editingName;
       if (nameActive) {
         fillRoundedRect(renderer, SDL_Rect{nameRow.x - 2, nameRow.y - 2, nameRow.w + 4, nameRow.h + 4},
@@ -6129,7 +6682,7 @@ int main(int, char**) {
                centeredTextY(fonts.small, nameRow, tr(UiKey::GameName)),
                nameActive ? SDL_Color{208, 239, 255, 255} : SDL_Color{148, 177, 198, 255});
 
-      const SDL_Rect nameValue{650, 180, 479, 48};
+      const SDL_Rect nameValue{650, 180, 479, 44};
       if (gameSettings.editingName) {
         fillRoundedRect(renderer, nameValue, 12, SDL_Color{7, 25, 42, 228});
         strokeRoundedRect(renderer, nameValue, 12, SDL_Color{137, 211, 255, 145}, 1);
@@ -6144,68 +6697,176 @@ int main(int, char**) {
                centeredTextY(fonts.medium, nameValue, nameText),
                WHITE, false, true);
 
-      const SDL_Rect localeRow{460, 240, 680, 56};
-      const SDL_Rect row1{460, 304, 680, 56};
-      const SDL_Rect row2{460, 368, 680, 56};
-      const SDL_Rect row3{460, 432, 680, 56};
-      const SDL_Rect row4{460, 496, 680, 56};
+      clampSettingsScroll();
+      const bool protonMode = supportsProtonCompatibility(game) && protonCompatibilityEnabled(game);
+      const int doneRow = settingsDoneRow();
 
-      drawSettingRow(localeRow, gameSettings.row == 1 && !gameSettings.editingName,
-                     uiWord("로케일", "Locale", "ロケール"),
-                     gameLocaleUiLabel(gameSettings.locale), true);
+      auto drawActualSettingRow = [&](int actualRow, const SDL_Rect& rowRect) {
+        const bool active = gameSettings.row == actualRow && !gameSettings.editingName;
+        if (actualRow == 1) {
+          drawSettingRow(rowRect, active,
+                         uiWord("로케일", "Locale", "ロケール"),
+                         gameLocaleUiLabel(gameSettings.locale), true);
+          return;
+        }
 
-      if (isRgssEngine(game.engine)) {
-        drawSettingRow(row1, gameSettings.row == 2 && !gameSettings.editingName,
-                       tr(UiKey::RubyRuntime), rubySettingText(game), true);
-        const std::string scanValue = gameSettings.rubyScanResult.empty()
-          ? uiWord("A 눌러 검사", "Press A to scan", "A で検査")
-          : gameSettings.rubyScanResult;
-        drawSettingRow(row2, gameSettings.row == 3 && !gameSettings.editingName,
-                       rubyDeepScanLabel(), scanValue);
-        drawSettingRow(row3, gameSettings.row == 4 && !gameSettings.editingName,
-                       uiWord("패드 키 설정", "Gamepad Mapping", "ゲームパッド設定"),
-                       uiWord("A 눌러 설정", "Press A", "A で設定"));
-      } else if (isWebEngine(game.engine)) {
-        drawSettingRow(row1, gameSettings.row == 2 && !gameSettings.editingName,
-                       "NW.js", nwjsSettingText(game), true);
-        const std::string scanValue = gameSettings.nwjsScanResult.empty()
-          ? uiWord("A 눌러 검사", "Press A to scan", "A で検査")
-          : gameSettings.nwjsScanResult;
-        drawSettingRow(row2, gameSettings.row == 3 && !gameSettings.editingName,
-                       nwjsDeepScanLabel(), scanValue);
-      } else if (isEasyRpgEngine(game.engine)) {
-        drawSettingRow(row1, gameSettings.row == 2 && !gameSettings.editingName,
-                       uiWord("인코딩", "Encoding", "エンコーディング"), easyRpgEncodingLabel(game), true);
-        drawSettingRow(row2, gameSettings.row == 3 && !gameSettings.editingName,
-                       "MIDI SoundFont", easyRpgChoiceLabel(game, EasyRpgChoiceKind::Soundfont), true);
-        drawSettingRow(row3, gameSettings.row == 4 && !gameSettings.editingName,
-                       "Font 1", easyRpgChoiceLabel(game, EasyRpgChoiceKind::Font1), true);
-        drawSettingRow(row4, gameSettings.row == 5 && !gameSettings.editingName,
-                       "Font 2", easyRpgChoiceLabel(game, EasyRpgChoiceKind::Font2), true);
-      } else if (isWolfRpgEngine(game.engine)) {
-        drawSettingRow(row1, gameSettings.row == 2 && !gameSettings.editingName,
-                       "Proton", wolfProtonLabel(game), true);
-        const bool hasConfig = findWolfExecutable(game, true).has_value();
-        drawSettingRow(row2, gameSettings.row == 3 && !gameSettings.editingName,
-                       "Config.exe",
-                       hasConfig ? uiWord("A 눌러 실행", "Press A to run", "A で実行")
-                                 : uiWord("없음", "Not found", "なし"));
+        if (isRgssEngine(game.engine)) {
+          if (actualRow == 2) {
+            drawSettingRow(rowRect, active, tr(UiKey::RubyRuntime), rubySettingText(game), true);
+            return;
+          }
+          if (actualRow == 3) {
+            drawSettingRow(rowRect, active,
+                           uiWord("호환성 모드", "Compatibility Mode", "互換モード"),
+                           compatibilityModeLabel(game), true);
+            return;
+          }
+          if (protonMode && actualRow == 4) {
+            drawSettingRow(rowRect, active, "Proton", gameProtonLabel(game), true);
+            return;
+          }
+          if (protonMode && actualRow == 5) {
+            std::string envValue = protonEnvPresetLabel(game);
+            const std::size_t customCount = customProtonEnvironmentCount(game);
+            if (customCount > 0)
+              envValue += uiWord(" + 사용자 ", " + custom ", " + custom ") + std::to_string(customCount);
+            drawSettingRow(rowRect, active,
+                           uiWord("환경변수 프리셋", "Environment preset", "環境変数プリセット"),
+                           envValue, true);
+            return;
+          }
+          const int scanRow = protonMode ? 6 : 4;
+          if (actualRow == scanRow) {
+            const std::string value = gameSettings.rubyScanResult.empty()
+              ? uiWord("A 눌러 검사", "Press A to scan", "A で検査")
+              : gameSettings.rubyScanResult;
+            drawSettingRow(rowRect, active, rubyDeepScanLabel(), value);
+            return;
+          }
+          const int remapRow = protonMode ? 7 : 5;
+          if (actualRow == remapRow) {
+            drawSettingRow(rowRect, active,
+                           uiWord("패드 키 설정", "Gamepad Mapping", "ゲームパッド設定"),
+                           protonMode
+                             ? uiWord("Proton 모드 사용 불가", "Unavailable in Proton mode", "Proton モードでは使用不可")
+                             : uiWord("A 눌러 설정", "Press A", "A で設定"));
+            return;
+          }
+        } else if (isWebEngine(game.engine)) {
+          if (actualRow == 2) {
+            drawSettingRow(rowRect, active, "NW.js", nwjsSettingText(game), true);
+            return;
+          }
+          if (actualRow == 3) {
+            drawSettingRow(rowRect, active,
+                           uiWord("호환성 모드", "Compatibility Mode", "互換モード"),
+                           compatibilityModeLabel(game), true);
+            return;
+          }
+          if (protonMode && actualRow == 4) {
+            drawSettingRow(rowRect, active, "Proton", gameProtonLabel(game), true);
+            return;
+          }
+          if (protonMode && actualRow == 5) {
+            std::string envValue = protonEnvPresetLabel(game);
+            const std::size_t customCount = customProtonEnvironmentCount(game);
+            if (customCount > 0)
+              envValue += uiWord(" + 사용자 ", " + custom ", " + custom ") + std::to_string(customCount);
+            drawSettingRow(rowRect, active,
+                           uiWord("환경변수 프리셋", "Environment preset", "環境変数プリセット"),
+                           envValue, true);
+            return;
+          }
+          const int scanRow = protonMode ? 6 : 4;
+          if (actualRow == scanRow) {
+            const std::string value = gameSettings.nwjsScanResult.empty()
+              ? uiWord("A 눌러 검사", "Press A to scan", "A で検査")
+              : gameSettings.nwjsScanResult;
+            drawSettingRow(rowRect, active, nwjsDeepScanLabel(), value);
+            return;
+          }
+        } else if (isEasyRpgEngine(game.engine)) {
+          if (actualRow == 2) {
+            drawSettingRow(rowRect, active,
+                           uiWord("인코딩", "Encoding", "エンコーディング"),
+                           easyRpgEncodingLabel(game), true);
+            return;
+          }
+          if (actualRow == 3) {
+            drawSettingRow(rowRect, active, "MIDI SoundFont",
+                           easyRpgChoiceLabel(game, EasyRpgChoiceKind::Soundfont), true);
+            return;
+          }
+          if (actualRow == 4) {
+            drawSettingRow(rowRect, active, "Font 1",
+                           easyRpgChoiceLabel(game, EasyRpgChoiceKind::Font1), true);
+            return;
+          }
+          if (actualRow == 5) {
+            drawSettingRow(rowRect, active, "Font 2",
+                           easyRpgChoiceLabel(game, EasyRpgChoiceKind::Font2), true);
+            return;
+          }
+        } else if (isWolfRpgEngine(game.engine)) {
+          if (actualRow == 2) {
+            drawSettingRow(rowRect, active, "Proton", wolfProtonLabel(game), true);
+            return;
+          }
+          if (actualRow == 3) {
+            const bool hasConfig = findWolfExecutable(game, true).has_value();
+            drawSettingRow(rowRect, active, "Config.exe",
+                           hasConfig ? uiWord("A 눌러 실행", "Press A to run", "A で実行")
+                                     : uiWord("없음", "Not found", "なし"));
+            return;
+          }
+        }
+      };
+
+      for (int slot = 0; slot < SETTINGS_VISIBLE_MIDDLE_ROWS; ++slot) {
+        const int actualRow = gameSettings.scrollFirstRow + slot;
+        if (actualRow >= doneRow) break;
+        drawActualSettingRow(actualRow, SDL_Rect{460, 236 + slot * 44, 680, 40});
       }
 
-      const SDL_Rect doneButton{860, isEasyRpgEngine(game.engine) ? 560 : 520, 240, 52};
-      const bool doneActive = gameSettings.row == settingsDoneRow() && !gameSettings.editingName;
-      fillRoundedRect(renderer, doneButton, 16, doneActive ? SDL_Color{34, 110, 177, 220}
-                                                           : SDL_Color{11, 38, 61, 180});
-      strokeRoundedRect(renderer, doneButton, 16,
+      const int middleRows = std::max(0, doneRow - 1);
+      if (middleRows > SETTINGS_VISIBLE_MIDDLE_ROWS) {
+        const SDL_Rect track{1149, 236, 5, 216};
+        fillRoundedRect(renderer, track, 3, SDL_Color{90, 126, 153, 52});
+        const int maxFirst = middleRows - SETTINGS_VISIBLE_MIDDLE_ROWS + 1;
+        const int thumbH = std::max(42, track.h * SETTINGS_VISIBLE_MIDDLE_ROWS / middleRows);
+        const int travel = track.h - thumbH;
+        const int offset = maxFirst > 1
+          ? travel * (gameSettings.scrollFirstRow - 1) / (maxFirst - 1)
+          : 0;
+        fillRoundedRect(renderer, SDL_Rect{track.x, track.y + offset, track.w, thumbH}, 3,
+                        SDL_Color{119, 196, 239, 155});
+      }
+
+      const SDL_Rect doneButton{860, 468, 240, 42};
+      const bool doneActive = gameSettings.row == doneRow && !gameSettings.editingName;
+      fillRoundedRect(renderer, doneButton, 15,
+                      doneActive ? SDL_Color{34, 110, 177, 220} : SDL_Color{11, 38, 61, 180});
+      strokeRoundedRect(renderer, doneButton, 15,
                         doneActive ? SDL_Color{126, 214, 255, 165} : SDL_Color{88, 132, 164, 54}, 1);
       drawText(renderer, fonts.medium, tr(UiKey::Done),
                doneButton.x + doneButton.w / 2,
                centeredTextY(fonts.medium, doneButton, tr(UiKey::Done)),
                doneActive ? WHITE : SDL_Color{190, 209, 225, 255}, true);
 
+      if (protonMode) {
+        const char* protonHelp = gUiLanguage == UiLanguage::Korean
+          ? "ENV 직접 설정: mkxp-proton-env.txt (KEY=VALUE) · Proton은 SteamOS 컨트롤러 설정 사용"
+          : (gUiLanguage == UiLanguage::Japanese
+             ? "ENV 手動設定: mkxp-proton-env.txt (KEY=VALUE) · Proton は SteamOS コントローラー設定を使用"
+             : "Custom ENV: mkxp-proton-env.txt (KEY=VALUE) · Proton uses the SteamOS controller layout");
+        drawText(renderer, fonts.small, protonHelp,
+                 settingsPanel.x + settingsPanel.w / 2, 526,
+                 SDL_Color{142, 175, 199, 255}, true);
+      }
       drawText(renderer, fonts.small,
                gameSettings.editingName ? tr(UiKey::NameEditHelp) : tr(UiKey::SettingsHelp),
-               settingsPanel.x + settingsPanel.w / 2, isEasyRpgEngine(game.engine) ? 642 : 594, SDL_Color{128, 159, 184, 255}, true);
+               settingsPanel.x + settingsPanel.w / 2, 552,
+               SDL_Color{128, 159, 184, 255}, true);
     }
     if (keyRemap.active && !games.empty()) {
       SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);

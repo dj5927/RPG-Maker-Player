@@ -40,8 +40,8 @@ Steam/데스크톱/시스템 로케일 정보를 이용해 언어를 감지합�
 
 ## SteamOS 설치 방법
 
-1. v1.0 Release에서 **`RPG_Maker_Player_SteamOS_WINDOWS_SAFE.tar.gz`**를 다운로드합니다.
-2. 압축을 풉니다. Windows에서 압축을 풀어도 됩니다. v1.0 Windows-safe 패키지는 Linux 심볼릭 링크를 제거한 배포본입니다.
+1. v1.1 Release에서 **`RPG_Maker_Player_SteamOS_WINDOWS_SAFE.tar.gz`**를 다운로드합니다.
+2. 압축을 풉니다. Windows에서 압축을 풀어도 됩니다. v1.1 Windows-safe 패키지는 Linux 심볼릭 링크를 제거한 배포본입니다.
 3. 압축 해제된 **`rpg maker player`** 폴더를 SteamOS 기기로 복사합니다.
 4. SteamOS **Desktop Mode**로 들어갑니다.
 5. 폴더 안의 **`RPG Maker Player.desktop`**을 실행합니다.
