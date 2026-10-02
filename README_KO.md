@@ -6,6 +6,14 @@
 
 **RPG Maker Player**는 SteamOS용 RPG Maker / WOLF RPG Editor 올인원 런처입니다. 하나의 게임 루트를 스캔해 엔진과 필요한 런타임을 판별하고 각 게임에 맞는 실행 방식을 자동으로 선택합니다.
 
+## 스크린샷
+
+| 홈 화면 | 게임 설정 |
+|---|---|
+| ![홈 화면](docs/screenshots/home.jpg) | ![게임 설정](docs/screenshots/game-settings-rgss.jpg) |
+| 라이브러리 리스트 | WOLF 설정 |
+| ![라이브러리 리스트](docs/screenshots/library-list.jpg) | ![WOLF 설정](docs/screenshots/wolf-settings.jpg) |
+
 ## 지원 엔진
 
 | 엔진 | 실행 방식 | 주요 기능 |
