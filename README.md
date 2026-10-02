@@ -8,9 +8,9 @@
 
 ## Screenshots
 
-| Home | Game settings | WOLF settings |
-|---|---|---|
-| ![Home](docs/screenshots/home.jpg) | ![Game settings](docs/screenshots/game-settings-rgss.jpg) | ![WOLF settings](docs/screenshots/wolf-settings.jpg) |
+| Game settings | WOLF settings |
+|---|---|
+| ![Game settings](docs/screenshots/game-settings-rgss.jpg) | ![WOLF settings](docs/screenshots/wolf-settings.jpg) |
 
 ## Supported engines
 
