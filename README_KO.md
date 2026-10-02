@@ -8,9 +8,11 @@
 
 ## 스크린샷
 
-| 게임 설정 | WOLF 설정 |
+| 홈 화면 | 게임별 설정 |
 |---|---|
-| ![게임 설정](docs/screenshots/game-settings-rgss.jpg) | ![WOLF 설정](docs/screenshots/wolf-settings.jpg) |
+| ![홈 화면](docs/screenshots/home.jpg) | ![게임별 설정](docs/screenshots/game-settings.jpg) |
+| 개별 키 매핑 | 라이브러리 리스트 뷰 |
+| ![개별 키 매핑](docs/screenshots/controller-mapping.jpg) | ![라이브러리 리스트 뷰](docs/screenshots/library-list.jpg) |
 
 ## 지원 엔진
 

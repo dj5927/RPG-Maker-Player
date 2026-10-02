@@ -8,9 +8,11 @@
 
 ## Screenshots
 
-| Game settings | WOLF settings |
+| Home | Game settings |
 |---|---|
-| ![Game settings](docs/screenshots/game-settings-rgss.jpg) | ![WOLF settings](docs/screenshots/wolf-settings.jpg) |
+| ![Home](docs/screenshots/home.jpg) | ![Game settings](docs/screenshots/game-settings.jpg) |
+| Per-game controller mapping | Library list view |
+| ![Per-game controller mapping](docs/screenshots/controller-mapping.jpg) | ![Library list view](docs/screenshots/library-list.jpg) |
 
 ## Supported engines
 
