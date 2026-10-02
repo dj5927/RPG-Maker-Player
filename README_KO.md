@@ -8,11 +8,9 @@
 
 ## 스크린샷
 
-| 홈 화면 | 게임 설정 |
-|---|---|
-| ![홈 화면](docs/screenshots/home.jpg) | ![게임 설정](docs/screenshots/game-settings-rgss.jpg) |
-| 라이브러리 리스트 | WOLF 설정 |
-| ![라이브러리 리스트](docs/screenshots/library-list.jpg) | ![WOLF 설정](docs/screenshots/wolf-settings.jpg) |
+| 홈 화면 | 게임 설정 | WOLF 설정 |
+|---|---|---|
+| ![홈 화면](docs/screenshots/home.jpg) | ![게임 설정](docs/screenshots/game-settings-rgss.jpg) | ![WOLF 설정](docs/screenshots/wolf-settings.jpg) |
 
 ## 지원 엔진
 
