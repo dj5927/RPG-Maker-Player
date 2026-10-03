@@ -447,7 +447,7 @@ void EventThread::process(RGSSThreadData &rtData)
                     exitComboStarted == 0)
                 {
                     exitComboStarted = SDL_GetTicks64();
-                    SDL_AddTimer(300, pushExitComboTimerEvent,
+                    SDL_AddTimer(1500, pushExitComboTimerEvent,
                                  reinterpret_cast<void*>(static_cast<uintptr_t>(exitComboStarted)));
                 }
                 break;
@@ -466,7 +466,7 @@ void EventThread::process(RGSSThreadData &rtData)
                     controllerState.buttons[SDL_CONTROLLER_BUTTON_START] &&
                     controllerState.buttons[SDL_CONTROLLER_BUTTON_BACK])
                 {
-                    Debug() << "Start+Select exit confirmation requested";
+                    Debug() << "Start+Select 1.5s direct exit requested";
                     const char *requestFile = SDL_getenv("MKXP_EXIT_REQUEST_FILE");
                     if (requestFile && *requestFile)
                     {

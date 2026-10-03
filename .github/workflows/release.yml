@@ -23,7 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           FILE='release-assets/RPG_Maker_Player_SteamOS_WINDOWS_SAFE.tar.gz'
-          EXPECTED='a1353da7690df178f7d174b6fb2a58adfb02bcdc6b9396bbd04d300c2397485e'
+          EXPECTED='4fe2609064ec5c0bc628b62066c9687d35fad178c4c6c349ce4647d0e5c7b658'
           test -f "$FILE"
           ACTUAL="$(sha256sum "$FILE" | awk '{print $1}')"
           test "$ACTUAL" = "$EXPECTED"
@@ -37,6 +37,6 @@ jobs:
           set -euo pipefail
           gh release create "$GITHUB_REF_NAME" \
             'release-assets/RPG_Maker_Player_SteamOS_WINDOWS_SAFE.tar.gz' \
-            --title 'RPG Maker Player 1.1' \
-            --notes-file 'RELEASE_NOTES_v1.1.md' \
+            --title 'RPG Maker Player 1.2' \
+            --notes-file 'RELEASE_NOTES_v1.2.md' \
             --verify-tag

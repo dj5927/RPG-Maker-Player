@@ -6,12 +6,14 @@
 
 **RPG Maker Player** is a SteamOS-focused all-in-one launcher for RPG Maker and WOLF RPG Editor games. It scans one game library folder, detects the engine/runtime, and launches games through the appropriate compatibility layer.
 
-## What's new in v1.1
+## What's new in v1.2
 
-- Proton fallback mode for XP / VX / VX Ace / MV / MZ, including per-game Proton selection.
-- Proton environment presets and custom `KEY=VALUE` overrides, including WineD3D compatibility options.
-- Unified scrollable per-game settings layout across supported engines.
-- Smoother Home navigation: Down from My Library opens the full Library, and B opens/focuses the sidebar menu.
+- Improved SteamOS suspend/resume reliability by keeping the launcher frontend mapped while a game is running.
+- Added single-instance protection to prevent duplicate launcher processes after resume or repeated launches.
+- Reduced launcher idle CPU/power use with dirty-rendering and slower idle polling.
+- Simplified in-game exit handling: hold **Start + Select for 1.5 seconds** to exit the current game directly with no popup.
+- Unified the 1.5-second exit hold across RGSS, MV/MZ, EasyRPG, WOLF/Proton and launcher fallback input paths, with process-group cleanup for stubborn child processes.
+- The v1.2 Windows-safe package is update-safe and does not overwrite launcher config, catalogs, cache/log contents, or `game/gamelist.json`.
 
 ## Screenshots
 
@@ -45,8 +47,8 @@ The launcher detects Steam / desktop / system locale information. Per-game local
 
 ## Installation on SteamOS
 
-1. Download **`RPG_Maker_Player_SteamOS_WINDOWS_SAFE.tar.gz`** from the v1.1 Release.
-2. Extract it. Extraction on Windows is supported; the v1.1 Windows-safe package contains no Linux symlinks.
+1. Download **`RPG_Maker_Player_SteamOS_WINDOWS_SAFE.tar.gz`** from the v1.2 Release.
+2. Extract it. Extraction on Windows is supported; the v1.2 Windows-safe package contains no Linux symlinks.
 3. Copy the extracted **`rpg maker player`** folder to your SteamOS device.
 4. Enter **Desktop Mode**.
 5. Run **`RPG Maker Player.desktop`** inside the folder.
@@ -104,7 +106,8 @@ The launcher watches thumbnail changes and reloads replaced PNG files while it i
 | LT / RT | Quick-cycle engine filter |
 | Select (tap) | Open selected game's settings |
 | Start (tap) | Open filter / sort |
-| Start + Select (hold ~0.3 sec) | Open exit confirmation |
+| Start + Select (hold ~0.3 sec, launcher screen) | Open launcher exit confirmation |
+| Start + Select (hold 1.5 sec, while a game is running) | Exit the current game directly; no popup |
 
 ### Folder picker
 

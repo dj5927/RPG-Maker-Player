@@ -32,6 +32,7 @@
 #include <iconv.h>
 #include <linux/input.h>
 #include <signal.h>
+#include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -47,6 +48,7 @@ constexpr int WIDE_HEIGHT = 800;
 constexpr double ASPECT_16_10 = 1.60;
 constexpr double ASPECT_16_10_TOLERANCE = 0.07;
 constexpr Uint64 EXIT_COMBO_HOLD_MS = 300;
+constexpr Uint64 GAME_EXIT_COMBO_HOLD_MS = 1500;
 const SDL_Color BG{16, 21, 29, 255};
 const SDL_Color WHITE{255, 255, 255, 255};
 const SDL_Color MUTED{170, 180, 194, 255};
@@ -1505,38 +1507,23 @@ void drawBrandLogo(SDL_Renderer* renderer, const SDL_Rect& box) {
 }
 
 #if defined(__linux__)
-void drawInGameExitConfirm(SDL_Window* window, SDL_Renderer* renderer, const FontSet& fonts) {
-  SDL_ShowWindow(window);
-  SDL_RestoreWindow(window);
-  SDL_RaiseWindow(window);
-  SDL_SetWindowInputFocus(window);
+int gSingleInstanceLockFd = -1;
+
+void drawFrontendStandby(SDL_Renderer* renderer) {
   SDL_RenderSetViewport(renderer, nullptr);
-  SDL_SetRenderDrawColor(renderer, BG.r, BG.g, BG.b, BG.a);
+  SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
   SDL_RenderClear(renderer);
-  setUiContentViewport(renderer);
-  const SDL_Rect panel{360, 220, 560, 270};
-  fillRoundedRect(renderer, panel, 20, SDL_Color{7, 24, 41, 246});
-  strokeRoundedRect(renderer, panel, 20, SDL_Color{102, 184, 230, 110}, 1);
-  drawText(renderer, fonts.normal, tr(UiKey::ExitQuestion), WIDTH / 2, 276, WHITE, true);
-
-  const char* actionText = gUiLanguage == UiLanguage::Korean ? "A  종료        B  취소" :
-                           (gUiLanguage == UiLanguage::Japanese ? "A  終了        B  キャンセル" :
-                            "A  Exit        B  Cancel");
-  drawText(renderer, fonts.normal, actionText, WIDTH / 2, 365, WHITE, true);
-
-  const char* help = gUiLanguage == UiLanguage::Korean ? "방향키 선택 없이 A/B 버튼으로 바로 결정합니다" :
-                     (gUiLanguage == UiLanguage::Japanese ? "方向キー選択なしで A/B で決定します" :
-                      "Press A or B directly; there is no selection cursor");
-  drawText(renderer, fonts.small, help, WIDTH / 2, 430, MUTED2, true);
-  SDL_RenderSetViewport(renderer, nullptr);
   SDL_RenderPresent(renderer);
 }
 
 int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
                      const FontSet& fonts, SDL_GameController* controller,
                      const fs::path& exitRequestFile) {
+  (void)window;
+  (void)renderer;
+  (void)fonts;
+
   int childStatus = 0;
-  bool confirmVisible = false;
   bool waitRelease = false;
   Uint64 comboStarted = 0;
   Uint64 terminateRequestedAt = 0;
@@ -1551,6 +1538,14 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
     std::ofstream out(exitRequestFile, std::ios::binary | std::ios::trunc);
   };
   clearExitRequest();
+
+  auto logExit = [&](const std::string& message) {
+    std::ofstream exitLog(executableRoot() / "logs/MKXP_Launcher.log", std::ios::app);
+    if (exitLog) {
+      exitLog << message << '\n';
+      exitLog.flush();
+    }
+  };
 
   auto activeController = [&]() -> SDL_GameController* {
     if (controller && SDL_GameControllerGetAttached(controller)) return controller;
@@ -1600,7 +1595,7 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
     }
   };
 
-  auto evdevStartSelect = [&]() -> bool {
+  auto readEvdevCombo = [&]() -> bool {
     const Uint64 now = SDL_GetTicks64();
     if (now >= nextEvdevProbe) {
       refreshEvdevPads();
@@ -1608,14 +1603,30 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
     }
     constexpr int bitsPerWord = 8 * static_cast<int>(sizeof(unsigned long));
     unsigned long keyState[(KEY_MAX + bitsPerWord) / bitsPerWord]{};
+    bool start = false;
+    bool select = false;
     for (const int fd : evdevPads) {
       std::fill(std::begin(keyState), std::end(keyState), 0UL);
       if (ioctl(fd, EVIOCGKEY(sizeof(keyState)), keyState) < 0) continue;
-      const bool start = (keyState[BTN_START / bitsPerWord] & (1UL << (BTN_START % bitsPerWord))) != 0;
-      const bool select = (keyState[BTN_SELECT / bitsPerWord] & (1UL << (BTN_SELECT % bitsPerWord))) != 0;
-      if (start && select) return true;
+      const auto down = [&](int code) {
+        return (keyState[code / bitsPerWord] & (1UL << (code % bitsPerWord))) != 0;
+      };
+      start = start || down(BTN_START);
+      select = select || down(BTN_SELECT);
     }
-    return false;
+    return start && select;
+  };
+
+  auto requestDirectExit = [&](const char* source) {
+    if (terminateRequestedAt != 0) return;
+    clearExitRequest();
+    kill(-pid, SIGTERM);
+    terminateRequestedAt = SDL_GetTicks64();
+    comboStarted = 0;
+    waitRelease = true;
+    logExit(std::string("exit combo | direct exit ") + source +
+            " holdMs=" + std::to_string(GAME_EXIT_COMBO_HOLD_MS) +
+            " pid=" + std::to_string(pid));
   };
 
   while (true) {
@@ -1626,34 +1637,29 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
     SDL_PumpEvents();
     SDL_GameControllerUpdate();
 
-    if (!confirmVisible) {
+    if (terminateRequestedAt == 0) {
       std::error_code requestEc;
       const auto requestSize = fs::file_size(exitRequestFile, requestEc);
       if (!requestEc && requestSize > 0) {
-        clearExitRequest();
-        confirmVisible = true;
-        comboStarted = 0;
-        drawInGameExitConfirm(window, renderer, fonts);
+        requestDirectExit("request-file");
       }
     }
 
-    bool startPressed = false;
-    bool selectPressed = false;
+    bool comboPressed = false;
     if (SDL_GameController* pad = activeController()) {
-      startPressed = SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_START) != 0;
-      selectPressed = SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_BACK) != 0;
+      const bool startPressed = SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_START) != 0;
+      const bool selectPressed = SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_BACK) != 0;
+      comboPressed = startPressed && selectPressed;
     }
-    const bool evdevComboPressed = evdevStartSelect();
+    comboPressed = comboPressed || readEvdevCombo();
 
-    if (waitRelease) {
-      if (!startPressed && !selectPressed && !evdevComboPressed) waitRelease = false;
-    } else if (!confirmVisible) {
-      if ((startPressed && selectPressed) || evdevComboPressed) {
+    if (terminateRequestedAt == 0) {
+      if (waitRelease) {
+        if (!comboPressed) waitRelease = false;
+      } else if (comboPressed) {
         if (comboStarted == 0) comboStarted = SDL_GetTicks64();
-        if (SDL_GetTicks64() - comboStarted >= EXIT_COMBO_HOLD_MS) {
-          confirmVisible = true;
-          comboStarted = 0;
-          drawInGameExitConfirm(window, renderer, fonts);
+        if (SDL_GetTicks64() - comboStarted >= GAME_EXIT_COMBO_HOLD_MS) {
+          requestDirectExit("parent-input");
         }
       } else {
         comboStarted = 0;
@@ -1662,43 +1668,23 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
 
     SDL_Event event{};
     while (SDL_PollEvent(&event)) {
-      if (!confirmVisible) continue;
-      bool doExit = false;
-      bool doCancel = false;
-      if (event.type == SDL_CONTROLLERBUTTONDOWN) {
-        doExit = event.cbutton.button == SDL_CONTROLLER_BUTTON_A;
-        doCancel = event.cbutton.button == SDL_CONTROLLER_BUTTON_B;
-      } else if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
-        doExit = event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_z;
-        doCancel = event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_BACKSPACE;
-      }
-      if (doExit) {
-        clearExitRequest();
+      if (event.type == SDL_QUIT && terminateRequestedAt == 0) {
         kill(-pid, SIGTERM);
         terminateRequestedAt = SDL_GetTicks64();
-        confirmVisible = false;
-        waitRelease = true;
-        SDL_HideWindow(window);
-      } else if (doCancel) {
-        clearExitRequest();
-        confirmVisible = false;
-        waitRelease = true;
-        SDL_HideWindow(window);
+        logExit("exit combo | direct exit window-close pid=" + std::to_string(pid));
       }
     }
 
     if (terminateRequestedAt != 0 &&
         SDL_GetTicks64() - terminateRequestedAt >= 2500) {
-      // Proton/Wine may keep helper children alive after the game receives
-      // SIGTERM.  Finish the whole process group so Start+Select always exits.
       kill(-pid, SIGKILL);
-      terminateRequestedAt = 0;
+      terminateRequestedAt = SDL_GetTicks64();
     }
 
-    if (confirmVisible) drawInGameExitConfirm(window, renderer, fonts);
     SDL_Delay(16);
   }
 
+  clearExitRequest();
   if (fallbackController) SDL_GameControllerClose(fallbackController);
   for (const int fd : evdevPads) close(fd);
   return childStatus;
@@ -3914,6 +3900,30 @@ int main(int, char**) {
   std::error_code ec;
   fs::create_directories(root / "logs", ec);
   fs::create_directories(root / "config", ec);
+  fs::create_directories(root / "cache", ec);
+#if defined(__linux__)
+  if (!std::getenv("MKXP_TEST_ALLOW_MULTIPLE_INSTANCES")) {
+    const fs::path lockPath = root / "cache/launcher.instance.lock";
+    gSingleInstanceLockFd = open(lockPath.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    if (gSingleInstanceLockFd >= 0 && flock(gSingleInstanceLockFd, LOCK_EX | LOCK_NB) != 0) {
+      std::ofstream duplicateLog(root / "logs/MKXP_Launcher.log", std::ios::app);
+      if (duplicateLog) {
+        duplicateLog << "single instance | blocked duplicate launcher pid=" << getpid() << '\n';
+      }
+      close(gSingleInstanceLockFd);
+      gSingleInstanceLockFd = -1;
+      return 0;
+    }
+    if (gSingleInstanceLockFd >= 0) {
+      const std::string pidText = std::to_string(getpid()) + "\n";
+      const int truncateRc = ftruncate(gSingleInstanceLockFd, 0);
+      const ssize_t writeRc = truncateRc == 0
+        ? write(gSingleInstanceLockFd, pidText.data(), pidText.size())
+        : -1;
+      (void)writeRc;
+    }
+  }
+#endif
 
   if (const char* testGamePath = std::getenv("MKXP_TEST_NWJS_GAME")) {
     GameInfo testGame = inspectGame(fs::path(testGamePath));
@@ -4728,15 +4738,15 @@ int main(int, char**) {
       status = uiWord("WOLF Config.exe를 찾을 수 없습니다.", "WOLF Config.exe was not found.", "WOLF Config.exe が見つかりません。");
       return;
     }
-    SDL_HideWindow(window);
-    log << "wolf config launch | folder=" << games[selected].folderName
+    drawFrontendStandby(renderer);
+    log << "frontend surface | mapped standby kind=wolf-config folder=" << games[selected].folderName
         << " proton=" << wolfProtonLabel(games[selected]) << '\n';
     log.flush();
     launchWolfExecutable(root, games[selected], true, status, window, renderer, fonts, controller);
     SDL_PumpEvents();
     SDL_FlushEvents(SDL_KEYDOWN, SDL_CONTROLLERBUTTONUP);
-    SDL_ShowWindow(window);
-    SDL_RaiseWindow(window);
+    log << "frontend surface | child returned kind=wolf-config folder=" << games[selected].folderName << '\n';
+    log.flush();
   };
   auto drawNwjsDeepScanProgress = [&](const std::string& version, int index, int total) {
     SDL_RenderSetViewport(renderer, nullptr);
@@ -5460,7 +5470,13 @@ int main(int, char**) {
       return;
     }
     if (games.empty() || folderPicker.active || gameSettings.active || filterSort.active || search.active) return;
-    SDL_HideWindow(window);
+    // ES-DE-style handoff: keep the frontend window mapped for the entire game
+    // lifetime.  A black standby frame sits behind the child so Gamescope always
+    // has a valid frontend surface to fall back to when the game closes.
+    drawFrontendStandby(renderer);
+    log << "frontend surface | mapped standby kind=game folder=" << games[selected].folderName
+        << " engine=" << engineLabel(games[selected].engine) << '\n';
+    log.flush();
     if (isRgssEngine(games[selected].engine) && !protonCompatibilityEnabled(games[selected]) &&
         games[selected].rubyDetectionSource == "deferred:auto") {
       auto& game = games[selected];
@@ -5481,6 +5497,8 @@ int main(int, char**) {
     SDL_PumpEvents();
     const auto playStartedAt = std::chrono::steady_clock::now();
     launchGame(root, games[selected], status, window, renderer, fonts, controller);
+    log << "frontend surface | child returned kind=game folder=" << games[selected].folderName << '\n';
+    log.flush();
     const auto playedFor = std::chrono::duration_cast<std::chrono::seconds>(
       std::chrono::steady_clock::now() - playStartedAt).count();
     auto& historyEntry = playHistory[historyGameKey(games[selected])];
@@ -5504,8 +5522,6 @@ int main(int, char**) {
       SDL_FlushEvents(SDL_KEYDOWN, SDL_CONTROLLERBUTTONUP);
       SDL_Delay(10);
     }
-    SDL_ShowWindow(window);
-    SDL_RaiseWindow(window);
   };
 
   auto drawSidebar = [&]() {
@@ -6013,9 +6029,15 @@ int main(int, char**) {
       cursorX += 35 + textWidth(fonts.small, hint.label) + groupGap;
     }
   };
+  Uint64 nextIdleRedrawAt = 0;
+  log << "power policy | idleRedrawMs=750 idlePollMs=50 activePollMs=8" << '\n';
+  log.flush();
   while (running) {
+    const Uint64 loopStartedAt = SDL_GetTicks64();
+    bool sawUiEvent = false;
     SDL_Event event{};
     while (SDL_PollEvent(&event)) {
+      sawUiEvent = true;
       if (event.type == SDL_QUIT) running = false;
       else if (event.type == SDL_CONTROLLERDEVICEADDED && !controller) controller = openFirstController();
       else if (event.type == SDL_CONTROLLERDEVICEREMOVED && controller) {
@@ -6382,6 +6404,14 @@ int main(int, char**) {
     }
 
     const float sidebarTarget = uiShell.sidebarFocused ? 1.0f : 0.0f;
+    const bool sidebarAnimating = std::abs(sidebarTarget - uiShell.sidebarAnim) >= 0.01f;
+    const bool timedUiActive = uiShell.sectionTransitionActive || sidebarAnimating ||
+                               startHeld || selectHeld || analogXDir != 0 || analogYDir != 0 ||
+                               triggerL2Held || triggerR2Held;
+    const Uint64 redrawNow = SDL_GetTicks64();
+    const bool periodicIdleRedraw = redrawNow >= nextIdleRedrawAt;
+    const bool renderFrame = sawUiEvent || timedUiActive || periodicIdleRedraw;
+    if (renderFrame) {
     uiShell.sidebarAnim += (sidebarTarget - uiShell.sidebarAnim) * 0.18f;
     if (std::abs(sidebarTarget - uiShell.sidebarAnim) < 0.01f) uiShell.sidebarAnim = sidebarTarget;
 
@@ -6926,6 +6956,12 @@ int main(int, char**) {
     }
 
     SDL_RenderPresent(renderer);
+    nextIdleRedrawAt = SDL_GetTicks64() + 750;
+    }
+
+    const Uint64 loopElapsed = SDL_GetTicks64() - loopStartedAt;
+    const Uint64 targetLoopMs = timedUiActive ? 8 : 50;
+    if (loopElapsed < targetLoopMs) SDL_Delay(static_cast<Uint32>(targetLoopMs - loopElapsed));
   }
 
   if (controller) SDL_GameControllerClose(controller);

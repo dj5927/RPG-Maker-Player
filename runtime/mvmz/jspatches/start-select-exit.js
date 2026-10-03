@@ -1,16 +1,16 @@
 (function() {
-  try { console.log("[MKXP] Start+Select confirmation hook loaded"); } catch (_) {}
+  try { console.log("[MKXP] Start+Select 1.5s direct-exit hook loaded"); } catch (_) {}
   var startedAt = 0;
   var requested = false;
-  var HOLD_MS = 300;
+  var HOLD_MS = 1500;
   var mvPadHeld = {};
   var loggedPads = {};
 
-  function requestExitConfirmation() {
+  function requestDirectExit() {
     if (requested) return;
     requested = true;
     try {
-      console.log("[MKXP] Start+Select exit confirmation requested");
+      console.log("[MKXP] Start+Select 1.5s direct exit requested");
       var fs = require("fs");
       var target = process && process.env ? process.env.MKXP_EXIT_REQUEST_FILE : "";
       if (target) {
@@ -112,7 +112,7 @@
     var now = Date.now();
     if (held) {
       if (!startedAt) startedAt = now;
-      if (!requested && now - startedAt >= HOLD_MS) requestExitConfirmation();
+      if (!requested && now - startedAt >= HOLD_MS) requestDirectExit();
     } else {
       startedAt = 0;
       requested = false;

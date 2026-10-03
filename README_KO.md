@@ -6,6 +6,15 @@
 
 **RPG Maker Player**는 SteamOS용 RPG Maker / WOLF RPG Editor 올인원 런처입니다. 하나의 게임 루트를 스캔해 엔진과 필요한 런타임을 판별하고 각 게임에 맞는 실행 방식을 자동으로 선택합니다.
 
+## v1.2 업데이트
+
+- 게임 실행 중에도 런처 frontend surface를 유지해 SteamOS 슬립/복귀 후 게임 실행과 런처 복귀 안정성을 개선했습니다.
+- 중복 런처 실행을 막는 single-instance 보호를 추가했습니다.
+- idle dirty-render와 느린 대기 polling으로 런처 대기 중 CPU/전력 사용을 줄였습니다.
+- 게임 중 종료는 팝업 없이 **Start + Select를 1.5초 계속 누르면 즉시 종료**하는 방식으로 단순화했습니다.
+- RGSS, MV/MZ, EasyRPG, WOLF/Proton 및 부모 런처 fallback 입력까지 모두 같은 1.5초 hold 기준을 사용하며, 종료되지 않고 남는 자식 프로세스는 process-group 단위로 정리합니다.
+- v1.2 Windows-safe 패키지는 업데이트 시 launcher 설정, catalogs, cache/log 내용, `game/gamelist.json`을 덮어쓰지 않습니다.
+
 ## 스크린샷
 
 | 홈 화면 | 게임별 설정 |
@@ -40,8 +49,8 @@ Steam/데스크톱/시스템 로케일 정보를 이용해 언어를 감지합�
 
 ## SteamOS 설치 방법
 
-1. v1.1 Release에서 **`RPG_Maker_Player_SteamOS_WINDOWS_SAFE.tar.gz`**를 다운로드합니다.
-2. 압축을 풉니다. Windows에서 압축을 풀어도 됩니다. v1.1 Windows-safe 패키지는 Linux 심볼릭 링크를 제거한 배포본입니다.
+1. v1.2 Release에서 **`RPG_Maker_Player_SteamOS_WINDOWS_SAFE.tar.gz`**를 다운로드합니다.
+2. 압축을 풉니다. Windows에서 압축을 풀어도 됩니다. v1.2 Windows-safe 패키지는 Linux 심볼릭 링크를 제거한 배포본입니다.
 3. 압축 해제된 **`rpg maker player`** 폴더를 SteamOS 기기로 복사합니다.
 4. SteamOS **Desktop Mode**로 들어갑니다.
 5. 폴더 안의 **`RPG Maker Player.desktop`**을 실행합니다.
@@ -99,7 +108,8 @@ Games/
 | LT / RT | 엔진 필터 빠른 전환 |
 | Select 짧게 | 선택한 게임 설정 열기 |
 | Start 짧게 | 필터 / 정렬 열기 |
-| Start + Select 약 0.3초 | 종료 확인창 |
+| Start + Select 약 0.3초 (런처 화면) | 런처 종료 확인창 |
+| Start + Select 1.5초 유지 (게임 실행 중) | 팝업 없이 현재 게임 즉시 종료 |
 
 ### 폴더 선택 화면
 
