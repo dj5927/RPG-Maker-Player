@@ -28,6 +28,7 @@
 #include <vector>
 
 #if defined(__linux__)
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <iconv.h>
 #include <linux/input.h>
@@ -49,6 +50,8 @@ constexpr double ASPECT_16_10 = 1.60;
 constexpr double ASPECT_16_10_TOLERANCE = 0.07;
 constexpr Uint64 EXIT_COMBO_HOLD_MS = 300;
 constexpr Uint64 GAME_EXIT_COMBO_HOLD_MS = 1500;
+constexpr Uint64 GAME_KEYBOARD_COMBO_HOLD_MS = 50;
+constexpr const char* APP_VERSION = "1.3";
 const SDL_Color BG{16, 21, 29, 255};
 const SDL_Color WHITE{255, 255, 255, 255};
 const SDL_Color MUTED{170, 180, 194, 255};
@@ -298,8 +301,8 @@ const char* tr(UiKey key) {
       case UiKey::ViewGrid: return "썸네일 5 x 2";
       case UiKey::ViewList: return "텍스트 목록";
       case UiKey::EmptyGames: return "선택한 게임 폴더에 2K/2K3 / WOLF / XP / VX / VX Ace / MV / MZ 게임 폴더를 넣어주세요.";
-      case UiKey::FooterGrid: return "D-Pad 이동  L1/R1 페이지  A 실행  X 보기  Y 검색  Select 설정  Start 메뉴  Start+Select 종료";
-      case UiKey::FooterList: return "D-Pad 이동  L1/R1 페이지  A 실행  X 보기  Y 검색  Select 설정  Start 메뉴  Start+Select 종료";
+      case UiKey::FooterGrid: return "D-Pad 이동  L1/R1 페이지  A 실행  X 보기  Y 검색  Select 설정  Start+Select 종료";
+      case UiKey::FooterList: return "D-Pad 이동  L1/R1 페이지  A 실행  X 보기  Y 검색  Select 설정  Start+Select 종료";
       case UiKey::ExitQuestion: return "종료하시겠습니까?";
       case UiKey::Yes: return "예";
       case UiKey::No: return "아니오";
@@ -375,8 +378,8 @@ const char* tr(UiKey key) {
       case UiKey::ViewGrid: return "サムネイル 5 x 2";
       case UiKey::ViewList: return "テキスト一覧";
       case UiKey::EmptyGames: return "選択したゲームフォルダーに 2K/2K3 / WOLF / XP / VX / VX Ace / MV / MZ のゲームフォルダーを入れてください。";
-      case UiKey::FooterGrid: return "D-Pad 移動  L1/R1 ページ  A 起動  X 表示  Y 検索  Select 設定  Start メニュー  Start+Select 終了";
-      case UiKey::FooterList: return "D-Pad 移動  L1/R1 ページ  A 起動  X 表示  Y 検索  Select 設定  Start メニュー  Start+Select 終了";
+      case UiKey::FooterGrid: return "D-Pad 移動  L1/R1 ページ  A 起動  X 表示  Y 検索  Select 設定  Start+Select 終了";
+      case UiKey::FooterList: return "D-Pad 移動  L1/R1 ページ  A 起動  X 表示  Y 検索  Select 設定  Start+Select 終了";
       case UiKey::ExitQuestion: return "終了しますか？";
       case UiKey::Yes: return "はい";
       case UiKey::No: return "いいえ";
@@ -453,8 +456,8 @@ const char* tr(UiKey key) {
     case UiKey::ViewGrid: return "THUMBNAIL 5 x 2";
     case UiKey::ViewList: return "TEXT LIST";
     case UiKey::EmptyGames: return "Put XP / VX / VX Ace / MV / MZ game folders in the selected game folder.";
-    case UiKey::FooterGrid: return "D-Pad Move  L1/R1 Page  A Launch  X View  Y Search  Select Settings  Start Menu  Start+Select Exit";
-    case UiKey::FooterList: return "D-Pad Move  L1/R1 Page  A Launch  X View  Y Search  Select Settings  Start Menu  Start+Select Exit";
+    case UiKey::FooterGrid: return "D-Pad Move  L1/R1 Page  A Launch  X View  Y Search  Select Settings  Start+Select Exit";
+    case UiKey::FooterList: return "D-Pad Move  L1/R1 Page  A Launch  X View  Y Search  Select Settings  Start+Select Exit";
     case UiKey::ExitQuestion: return "Exit the launcher?";
     case UiKey::Yes: return "Yes";
     case UiKey::No: return "No";
@@ -877,11 +880,27 @@ struct UiShellState {
   MainSection sectionTransitionFrom = MainSection::Home;
   MainSection sectionTransitionTo = MainSection::Home;
   Uint64 sectionTransitionStartedAt = 0;
+  bool libraryPageTransitionActive = false;
+  int libraryPageTransitionDirection = 0;
+  std::size_t libraryPageTransitionFromSelected = 0;
+  int libraryPageTransitionFromScroll = 0;
+  std::size_t libraryPageTransitionToSelected = 0;
+  int libraryPageTransitionToScroll = 0;
+  Uint64 libraryPageTransitionStartedAt = 0;
   int homeRow = 0;
   std::size_t homeRecentPos = 0;
   std::size_t homeLibraryPos = 0;
   int settingsRow = 0;
   bool settingsDetailFocused = false;
+};
+
+struct UpdateUiState {
+  std::string latestVersion;
+  std::string message;
+  bool checked = false;
+  bool available = false;
+  bool prompt = false;
+  bool promptYes = true;
 };
 
 struct PlayHistoryEntry {
@@ -1011,13 +1030,59 @@ void eraseLastUtf8Codepoint(std::string& text) {
   text.erase(pos);
 }
 
-void requestSteamOnScreenKeyboard() {
+struct SteamKeyboardRequestResult {
+  bool shown = false;
+  std::string method;
+  std::string diagnostic;
+};
+
+SteamKeyboardRequestResult requestSteamOnScreenKeyboard() {
 #if defined(__linux__)
+  using SteamApiInitFn = bool (*)();
+  using SteamUtilsAccessorFn = void* (*)();
+  using ShowFloatingKeyboardFn = bool (*)(void*, int, int, int, int, int);
+
+  const char* explicitApi = std::getenv("MKXP_STEAM_API_PATH");
+  const std::array<std::string, 4> apiCandidates{{
+      explicitApi && *explicitApi ? explicitApi : "",
+      "./libsteam_api.so",
+      "./lib/libsteam_api.so",
+      "libsteam_api.so",
+  }};
+
+  for (const auto& candidate : apiCandidates) {
+    if (candidate.empty()) continue;
+    void* handle = dlopen(candidate.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!handle) continue;
+    auto init = reinterpret_cast<SteamApiInitFn>(dlsym(handle, "SteamAPI_Init"));
+    auto show = reinterpret_cast<ShowFloatingKeyboardFn>(
+        dlsym(handle, "SteamAPI_ISteamUtils_ShowFloatingGamepadTextInput"));
+    SteamUtilsAccessorFn utilsAccessor = reinterpret_cast<SteamUtilsAccessorFn>(
+        dlsym(handle, "SteamAPI_SteamUtils_v011"));
+    if (!utilsAccessor) {
+      utilsAccessor = reinterpret_cast<SteamUtilsAccessorFn>(dlsym(handle, "SteamAPI_SteamUtils_v010"));
+    }
+    if (init && show && utilsAccessor && init()) {
+      void* utils = utilsAccessor();
+      if (utils && show(utils, 0, 0, 0, 0, 0)) {
+        return {true, "steamworks", candidate};
+      }
+      dlclose(handle);
+      return {false, "steamworks", "ShowFloatingGamepadTextInput returned false via " + candidate};
+    }
+    dlclose(handle);
+  }
+
+  static constexpr const char* kSteamDeckKeyboardUrl =
+      "steam://open/keyboard?XPosition=0&YPosition=0&Width=0&Height=0&Mode=0";
+  // SDL2's Steam Deck X11 backend uses this parameterized deeplink for the
+  // floating keyboard. mkxp-z ships an older SDL without SDL_OpenURL, so
+  // use the same endpoint directly through the running Steam client.
   const pid_t first = fork();
   if (first == 0) {
     const pid_t second = fork();
     if (second == 0) {
-      execlp("steam", "steam", "-ifrunning", "steam://open/keyboard", static_cast<char*>(nullptr));
+      execlp("steam", "steam", "-ifrunning", kSteamDeckKeyboardUrl, static_cast<char*>(nullptr));
       _exit(127);
     }
     _exit(0);
@@ -1026,6 +1091,9 @@ void requestSteamOnScreenKeyboard() {
     int status = 0;
     waitpid(first, &status, 0);
   }
+  return {false, "deeplink-fallback", "Steamworks unavailable or initialization failed"};
+#else
+  return {false, "unsupported", "non-Linux platform"};
 #endif
 }
 
@@ -1518,7 +1586,8 @@ void drawFrontendStandby(SDL_Renderer* renderer) {
 
 int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
                      const FontSet& fonts, SDL_GameController* controller,
-                     const fs::path& exitRequestFile) {
+                     const fs::path& exitRequestFile,
+                     bool allowSteamKeyboardShortcut = false) {
   (void)window;
   (void)renderer;
   (void)fonts;
@@ -1526,6 +1595,8 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
   int childStatus = 0;
   bool waitRelease = false;
   Uint64 comboStarted = 0;
+  bool keyboardWaitRelease = false;
+  Uint64 keyboardComboStarted = 0;
   Uint64 terminateRequestedAt = 0;
   Uint64 nextControllerProbe = 0;
   Uint64 nextEvdevProbe = 0;
@@ -1590,12 +1661,20 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
       const auto hasKey = [&](int code) {
         return (keyBits[code / bitsPerWord] & (1UL << (code % bitsPerWord))) != 0;
       };
-      if (hasKey(BTN_START) && hasKey(BTN_SELECT)) evdevPads.push_back(fd);
+      const bool relevant = hasKey(BTN_START) || hasKey(BTN_SELECT) ||
+                            hasKey(BTN_NORTH) || hasKey(BTN_WEST) || hasKey(KEY_X);
+      if (relevant) evdevPads.push_back(fd);
       else close(fd);
     }
   };
 
-  auto readEvdevCombo = [&]() -> bool {
+  struct EvdevGameButtons {
+    bool exitCombo = false;
+    bool keyboardCombo = false;
+  };
+
+  auto readEvdevButtons = [&]() -> EvdevGameButtons {
+    EvdevGameButtons buttons;
     const Uint64 now = SDL_GetTicks64();
     if (now >= nextEvdevProbe) {
       refreshEvdevPads();
@@ -1605,6 +1684,9 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
     unsigned long keyState[(KEY_MAX + bitsPerWord) / bitsPerWord]{};
     bool start = false;
     bool select = false;
+    bool north = false;
+    bool west = false;
+    bool keyX = false;
     for (const int fd : evdevPads) {
       std::fill(std::begin(keyState), std::end(keyState), 0UL);
       if (ioctl(fd, EVIOCGKEY(sizeof(keyState)), keyState) < 0) continue;
@@ -1613,8 +1695,16 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
       };
       start = start || down(BTN_START);
       select = select || down(BTN_SELECT);
+      // Linux letter aliases, positional virtual pads and Steam keyboard
+      // translations do not always expose the Deck face buttons on the same
+      // evdev node.  Aggregate all known X candidates across relevant nodes.
+      north = north || down(BTN_NORTH);
+      west = west || down(BTN_WEST);
+      keyX = keyX || down(KEY_X);
     }
-    return start && select;
+    buttons.exitCombo = start && select;
+    buttons.keyboardCombo = select && (north || west || keyX) && !start;
+    return buttons;
   };
 
   auto requestDirectExit = [&](const char* source) {
@@ -1646,12 +1736,17 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
     }
 
     bool comboPressed = false;
+    bool keyboardComboPressed = false;
     if (SDL_GameController* pad = activeController()) {
       const bool startPressed = SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_START) != 0;
       const bool selectPressed = SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_BACK) != 0;
+      const bool xPressed = SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_X) != 0;
       comboPressed = startPressed && selectPressed;
+      keyboardComboPressed = selectPressed && xPressed && !startPressed;
     }
-    comboPressed = comboPressed || readEvdevCombo();
+    const EvdevGameButtons evdevButtons = readEvdevButtons();
+    comboPressed = comboPressed || evdevButtons.exitCombo;
+    keyboardComboPressed = keyboardComboPressed || evdevButtons.keyboardCombo;
 
     if (terminateRequestedAt == 0) {
       if (waitRelease) {
@@ -1664,6 +1759,31 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
       } else {
         comboStarted = 0;
       }
+    }
+
+    if (allowSteamKeyboardShortcut && terminateRequestedAt == 0) {
+      if (keyboardWaitRelease) {
+        if (!keyboardComboPressed) keyboardWaitRelease = false;
+      } else if (keyboardComboPressed) {
+        if (keyboardComboStarted == 0) keyboardComboStarted = SDL_GetTicks64();
+        if (SDL_GetTicks64() - keyboardComboStarted >= GAME_KEYBOARD_COMBO_HOLD_MS) {
+          const SteamKeyboardRequestResult keyboardRequest = requestSteamOnScreenKeyboard();
+          keyboardComboStarted = 0;
+          keyboardWaitRelease = true;
+          logExit(std::string("game keyboard | requested source=parent-input combo=Select+X holdMs=") +
+                  std::to_string(GAME_KEYBOARD_COMBO_HOLD_MS) +
+                  " pid=" + std::to_string(pid) +
+                  " action=open" +
+                  " method=" + keyboardRequest.method +
+                  " shown=" + (keyboardRequest.shown ? "1" : "0") +
+                  " diagnostic=" + keyboardRequest.diagnostic);
+        }
+      } else {
+        keyboardComboStarted = 0;
+      }
+    } else {
+      keyboardComboStarted = 0;
+      keyboardWaitRelease = false;
     }
 
     SDL_Event event{};
@@ -3324,11 +3444,40 @@ int launchRgssGame(const fs::path& launcherRoot, const GameInfo& game, std::stri
       // that EINVAL case with default pthread attributes.
       const fs::path pthreadCompat = launcherRoot / "runtime/ruby19/libpthread_retry_einval.so";
       if (fs::is_regular_file(pthreadCompat)) {
-        std::string preload = pthreadCompat.string();
-        if (const char* oldPreload = std::getenv("LD_PRELOAD")) {
-          if (*oldPreload) preload += ":" + std::string(oldPreload);
+        fs::path preloadCompat = pthreadCompat;
+        std::error_code preloadEc;
+        const fs::path preloadAliasDir = fs::temp_directory_path(preloadEc) /
+            ("mkxp-ruby19-" + std::to_string(static_cast<unsigned long long>(getuid())) + "-" +
+             std::to_string(static_cast<unsigned long long>(std::hash<std::string>{}(launcherRoot.string()))));
+        if (!preloadEc) {
+          fs::create_directories(preloadAliasDir, preloadEc);
+          if (!preloadEc) {
+            const fs::path preloadAlias = preloadAliasDir / "libpthread_retry_einval.so";
+            fs::remove(preloadAlias, preloadEc);
+            preloadEc.clear();
+            fs::create_symlink(pthreadCompat, preloadAlias, preloadEc);
+            if (preloadEc) {
+              preloadEc.clear();
+              fs::copy_file(pthreadCompat, preloadAlias,
+                            fs::copy_options::overwrite_existing, preloadEc);
+            }
+            if (!preloadEc && fs::is_regular_file(preloadAlias)) preloadCompat = preloadAlias;
+          }
         }
-        setenv("LD_PRELOAD", preload.c_str(), 1);
+
+        const std::string preloadCompatText = preloadCompat.string();
+        if (preloadCompatText.find_first_of(" \t\r\n") == std::string::npos) {
+          std::string preload = preloadCompatText;
+          if (const char* oldPreload = std::getenv("LD_PRELOAD")) {
+            if (*oldPreload) preload += ":" + std::string(oldPreload);
+          }
+          setenv("LD_PRELOAD", preload.c_str(), 1);
+          dprintf(STDERR_FILENO, "ruby19 pthread preload=%s\n", preloadCompatText.c_str());
+        } else {
+          dprintf(STDERR_FILENO,
+                  "ruby19 pthread preload skipped: no whitespace-safe alias for %s\n",
+                  pthreadCompat.c_str());
+        }
       }
     }
 
@@ -3348,7 +3497,7 @@ int launchRgssGame(const fs::path& launcherRoot, const GameInfo& game, std::stri
     status = tr(UiKey::MkxpForkFailed);
     return -1;
   }
-  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller, exitRequestFile);
+  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller, exitRequestFile, true);
   if (WIFEXITED(childStatus)) {
     const int code = WEXITSTATUS(childStatus);
     if (code == 0)
@@ -3456,6 +3605,58 @@ fs::path primarySteamRoot() {
     if (fs::is_directory(root / "steamapps", ec)) return root;
   }
   return roots.empty() ? fs::path{} : roots.front();
+}
+
+struct UpdateHelperResult {
+  bool ok = false;
+  std::string status;
+  std::string latest;
+  std::string error;
+};
+
+UpdateHelperResult runUpdateHelper(const fs::path& root, const std::string& mode,
+                                   const std::string& latest = {}) {
+  UpdateHelperResult result;
+#if defined(__linux__)
+  const fs::path script = root / "runtime/update/update.sh";
+  const fs::path out = root / "cache/update/launcher_update_status.txt";
+  std::error_code ec;
+  fs::create_directories(out.parent_path(), ec);
+  if (!fs::is_regular_file(script)) {
+    result.error = "helper_missing";
+    return result;
+  }
+  fs::remove(out, ec);
+  const pid_t pid = fork();
+  if (pid == 0) {
+    execl("/bin/bash", "bash", script.c_str(), mode.c_str(), root.c_str(), APP_VERSION,
+          latest.c_str(), out.c_str(), static_cast<char*>(nullptr));
+    _exit(127);
+  }
+  if (pid < 0) {
+    result.error = "fork";
+    return result;
+  }
+  int childStatus = 0;
+  waitpid(pid, &childStatus, 0);
+  std::ifstream in(out, std::ios::binary);
+  std::string line;
+  while (std::getline(in, line)) {
+    const auto pos = line.find('=');
+    if (pos == std::string::npos) continue;
+    const std::string key = line.substr(0, pos);
+    const std::string value = line.substr(pos + 1);
+    if (key == "STATUS") result.status = value;
+    else if (key == "LATEST") result.latest = value;
+    else if (key == "ERROR") result.error = value;
+  }
+  result.ok = !result.status.empty() && result.status != "error" &&
+              WIFEXITED(childStatus) && WEXITSTATUS(childStatus) == 0;
+#else
+  (void)root; (void)mode; (void)latest;
+  result.error = "unsupported";
+#endif
+  return result;
 }
 
 bool requestProtonExperimentalInstall() {
@@ -3689,7 +3890,7 @@ int launchWolfExecutable(const fs::path& launcherRoot, const GameInfo& game, boo
     if (gameLogFd >= 0) {
       dup2(gameLogFd, STDOUT_FILENO);
       dup2(gameLogFd, STDERR_FILENO);
-      dprintf(gameLogFd, "launcher game=%s engine=%s proton=%s executable=%s compatdata=%s\n",
+      dprintf(gameLogFd, "launcher game=%s engine=%s proton=%s executable=%s compatdata=%s keyboardBridge=Select+X\n",
               game.folderName.c_str(), engineLabel(game.engine).c_str(), proton->name.c_str(),
               executable->c_str(), compatData.c_str());
       close(gameLogFd);
@@ -3726,7 +3927,7 @@ int launchWolfExecutable(const fs::path& launcherRoot, const GameInfo& game, boo
     return -1;
   }
 
-  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller, exitRequestFile);
+  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller, exitRequestFile, true);
   terminateWolfCompatProcesses(compatData);
   if (WIFEXITED(childStatus)) {
     const int code = WEXITSTATUS(childStatus);
@@ -3812,7 +4013,7 @@ int launchProtonCompatibilityGame(const fs::path& launcherRoot, const GameInfo& 
     if (gameLogFd >= 0) {
       dup2(gameLogFd, STDOUT_FILENO);
       dup2(gameLogFd, STDERR_FILENO);
-      dprintf(gameLogFd, "launcher game=%s engine=%s mode=proton proton=%s executable=%s compatdata=%s\n",
+      dprintf(gameLogFd, "launcher game=%s engine=%s mode=proton proton=%s executable=%s compatdata=%s keyboardBridge=Select+X\n",
               game.folderName.c_str(), engineLabel(game.engine).c_str(), proton->name.c_str(),
               executable->c_str(), compatData.c_str());
     }
@@ -3852,7 +4053,7 @@ int launchProtonCompatibilityGame(const fs::path& launcherRoot, const GameInfo& 
     return -1;
   }
 
-  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller, exitRequestFile);
+  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller, exitRequestFile, true);
   terminateWolfCompatProcesses(compatData);
   if (WIFEXITED(childStatus)) {
     const int code = WEXITSTATUS(childStatus);
@@ -4002,7 +4203,7 @@ int main(int, char**) {
   };
 
   if (!folderSelectionRequired) reloadGameRoot();
-  log << "launcher start | root=" << root.string()
+  log << "launcher start | build=V102 root=" << root.string()
       << " gameRoot=" << (folderSelectionRequired ? std::string("<select-required>") : gameRoot.string())
       << " config=" << configDiagnostic << " uiLanguage=" << uiLanguageCode(gUiLanguage) << '\n';
   log.flush();
@@ -4090,6 +4291,7 @@ int main(int, char**) {
   FilterSortState filterSort;
   SearchState search;
   UiShellState uiShell;
+  UpdateUiState updateUi;
   PlayHistory playHistory = loadPlayHistory(root);
   savePlayHistory(root, playHistory);
   std::string searchQuery;
@@ -4150,9 +4352,11 @@ int main(int, char**) {
   };
 
   auto toggleViewMode = [&]() {
-    if (folderPicker.active || gameSettings.active || filterSort.active || search.active || exitModal) return;
+    if (folderPicker.active || gameSettings.active || filterSort.active || search.active || exitModal ||
+        uiShell.libraryPageTransitionActive) return;
     gridView = !gridView;
     scroll = 0;
+    uiShell.libraryPageTransitionActive = false;
     saveUiPreferences(false);
   };
 
@@ -4184,15 +4388,6 @@ int main(int, char**) {
       rebuildGameView(preserve);
     }
   };
-  auto openFilterSort = [&]() {
-    if (folderPicker.active || gameSettings.active || exitModal || filterSort.active || search.active) return;
-    filterSort.active = true;
-    filterSort.row = 0;
-    filterSort.filterIndex = filterIndexFromCode(launcherConfig.engineFilter);
-    filterSort.sortIndex = launcherConfig.sortMode == "type" ? 0 : 1;
-    filterSort.buttonIndex = 0;
-  };
-
   auto stopSearchInput = [&]() {
     SDL_StopTextInput();
     SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "0");
@@ -4209,7 +4404,8 @@ int main(int, char**) {
   };
 
   auto openSearch = [&]() {
-    if (folderPicker.active || gameSettings.active || exitModal || filterSort.active || search.active) return;
+    if (folderPicker.active || gameSettings.active || exitModal || filterSort.active || search.active ||
+        uiShell.sectionTransitionActive || uiShell.libraryPageTransitionActive) return;
     search.active = true;
     search.text = searchQuery;
     SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "1");
@@ -4217,7 +4413,11 @@ int main(int, char**) {
     const SDL_Rect inputRect{350, 286, 580, 62};
     SDL_SetTextInputRect(&inputRect);
     SDL_StartTextInput();
-    requestSteamOnScreenKeyboard();
+    const SteamKeyboardRequestResult keyboardRequest = requestSteamOnScreenKeyboard();
+    log << "search keyboard | method=" << keyboardRequest.method
+        << " shown=" << (keyboardRequest.shown ? 1 : 0)
+        << " diagnostic=" << keyboardRequest.diagnostic << '\n';
+    log.flush();
   };
 
   auto closeSearch = [&]() {
@@ -4377,7 +4577,8 @@ int main(int, char**) {
   };
 
   auto openGameSettings = [&]() {
-    if (games.empty() || folderPicker.active || exitModal || filterSort.active || search.active) return;
+    if (games.empty() || folderPicker.active || exitModal || filterSort.active || search.active ||
+        uiShell.sectionTransitionActive || uiShell.libraryPageTransitionActive) return;
     gameSettings.active = true;
     gameSettings.editingName = false;
     gameSettings.row = 0;
@@ -4411,7 +4612,11 @@ int main(int, char**) {
     const SDL_Rect inputRect{650, 184, 460, 48};
     SDL_SetTextInputRect(&inputRect);
     SDL_StartTextInput();
-    requestSteamOnScreenKeyboard();
+    const SteamKeyboardRequestResult keyboardRequest = requestSteamOnScreenKeyboard();
+    log << "name keyboard | method=" << keyboardRequest.method
+        << " shown=" << (keyboardRequest.shown ? 1 : 0)
+        << " diagnostic=" << keyboardRequest.diagnostic << '\n';
+    log.flush();
   };
 
   auto cancelNameEditing = [&]() {
@@ -5093,6 +5298,7 @@ int main(int, char**) {
   };
 
   auto handlePointerDown = [&](float x, float y) {
+    if (uiShell.sectionTransitionActive || uiShell.libraryPageTransitionActive) return;
     if (keyRemap.active) return;
     if (search.active) {
       const SDL_Rect clearButton{430, 390, 190, 52};
@@ -5210,37 +5416,63 @@ int main(int, char**) {
     }
   };
 
-  auto wrap = [&](long long value) -> std::size_t {
-    if (games.empty()) return 0;
-    const long long n = static_cast<long long>(games.size());
-    value %= n;
-    if (value < 0) value += n;
-    return static_cast<std::size_t>(value);
+  auto libraryPageSize = [&]() -> int {
+    return gridView ? 10 : 9;
+  };
+
+  auto startLibraryPageTransition = [&](std::size_t fromSelected, int fromScroll,
+                                        std::size_t toSelected, int toScroll, int direction) {
+    if (fromSelected == toSelected || direction == 0) return;
+    uiShell.libraryPageTransitionActive = true;
+    uiShell.libraryPageTransitionDirection = direction > 0 ? 1 : -1;
+    uiShell.libraryPageTransitionFromSelected = fromSelected;
+    uiShell.libraryPageTransitionFromScroll = fromScroll;
+    uiShell.libraryPageTransitionToSelected = toSelected;
+    uiShell.libraryPageTransitionToScroll = toScroll;
+    uiShell.libraryPageTransitionStartedAt = SDL_GetTicks64();
   };
 
   auto moveSelection = [&](int dx, int dy) {
-    if (games.empty() || exitModal || folderPicker.active || gameSettings.active || filterSort.active || search.active) return;
+    if (games.empty() || exitModal || folderPicker.active || gameSettings.active || filterSort.active || search.active ||
+        uiShell.libraryPageTransitionActive) return;
     const std::size_t before = selected;
     if (!gridView) {
-      if (dy < 0) selected = wrap(static_cast<long long>(selected) - 1);
-      if (dy > 0) selected = wrap(static_cast<long long>(selected) + 1);
+      if (dy < 0 && selected > 0) --selected;
+      if (dy > 0 && selected + 1 < games.size()) ++selected;
     } else {
-      if (dx < 0) selected = wrap(static_cast<long long>(selected) - 1);
-      if (dx > 0) selected = wrap(static_cast<long long>(selected) + 1);
-      if (dy < 0) selected = wrap(static_cast<long long>(selected) - 5);
-      if (dy > 0) selected = wrap(static_cast<long long>(selected) + 5);
+      if (dx < 0 && selected > 0) --selected;
+      if (dx > 0 && selected + 1 < games.size()) ++selected;
+      if (dy < 0 && selected >= 5) selected -= 5;
+      if (dy > 0 && selected + 5 < games.size()) selected += 5;
+    }
+    if (gridView && selected != before && before / 10 != selected / 10) {
+      startLibraryPageTransition(before, scroll, selected, scroll, selected > before ? 1 : -1);
     }
     if (dx != 0 || dy != 0)
       uiSounds.play(selected != before ? UiSoundKind::Move : UiSoundKind::Boundary);
   };
 
   auto movePage = [&](int direction) {
-    if (games.empty() || exitModal || folderPicker.active || gameSettings.active || filterSort.active || search.active) return;
-    const long long current = static_cast<long long>(selected);
-    const long long last = static_cast<long long>(games.size()) - 1;
-    const long long next = std::clamp(current + static_cast<long long>(direction) * 10LL, 0LL, last);
-    selected = static_cast<std::size_t>(next);
-    uiSounds.play(next != current ? UiSoundKind::Move : UiSoundKind::Boundary);
+    if (games.empty() || exitModal || folderPicker.active || gameSettings.active || filterSort.active || search.active ||
+        uiShell.libraryPageTransitionActive || direction == 0) return;
+    const int pageSize = libraryPageSize();
+    const int currentPage = static_cast<int>(selected) / pageSize;
+    const int lastPage = static_cast<int>((games.size() - 1) / static_cast<std::size_t>(pageSize));
+    const int targetPage = std::clamp(currentPage + (direction > 0 ? 1 : -1), 0, lastPage);
+    if (targetPage == currentPage) {
+      uiSounds.play(UiSoundKind::Boundary);
+      return;
+    }
+    const int offset = static_cast<int>(selected) % pageSize;
+    const std::size_t targetBase = static_cast<std::size_t>(targetPage * pageSize);
+    const std::size_t targetSelected = std::min(targetBase + static_cast<std::size_t>(offset), games.size() - 1);
+    const int targetScroll = gridView ? scroll : targetPage * pageSize;
+    const std::size_t fromSelected = selected;
+    const int fromScroll = scroll;
+    selected = targetSelected;
+    scroll = targetScroll;
+    startLibraryPageTransition(fromSelected, fromScroll, selected, scroll, targetPage > currentPage ? 1 : -1);
+    uiSounds.play(UiSoundKind::Move);
   };
   auto homeRecentIndices = [&]() {
     return recentGameIndices(games, playHistory, games.size());
@@ -5265,7 +5497,7 @@ int main(int, char**) {
   };
 
   auto startSectionTransition = [&](MainSection target) {
-    if (uiShell.sectionTransitionActive || uiShell.section == target) return;
+    if (uiShell.sectionTransitionActive || uiShell.libraryPageTransitionActive || uiShell.section == target) return;
     uiShell.sectionTransitionFrom = uiShell.section;
     uiShell.sectionTransitionTo = target;
     uiShell.sectionTransitionStartedAt = SDL_GetTicks64();
@@ -5295,7 +5527,8 @@ int main(int, char**) {
   auto quickCycleEngineFilter = [&](int delta) {
     const bool homeLibraryFocused = uiShell.section == MainSection::Home && uiShell.homeRow == 1;
     const bool libraryFocused = uiShell.section == MainSection::Library;
-    if (uiShell.sidebarFocused || (!homeLibraryFocused && !libraryFocused) ||
+    if (uiShell.sidebarFocused || uiShell.sectionTransitionActive || uiShell.libraryPageTransitionActive ||
+        (!homeLibraryFocused && !libraryFocused) ||
         exitModal || folderPicker.active || gameSettings.active || filterSort.active || search.active) return false;
     cycleEngineFilter(delta);
     selected = 0;
@@ -5326,6 +5559,45 @@ int main(int, char**) {
     if (!search.active) uiShell.sidebarFocused = false;
   };
 
+  auto checkForLauncherUpdate = [&]() {
+    status = uiWord("업데이트 확인 중...", "Checking for updates...", "アップデートを確認中...");
+    const UpdateHelperResult result = runUpdateHelper(root, "check");
+    updateUi.checked = true;
+    updateUi.latestVersion = result.latest;
+    updateUi.available = result.ok && result.status == "update";
+    updateUi.prompt = updateUi.available;
+    updateUi.promptYes = true;
+    if (!result.ok) {
+      updateUi.message = uiWord("업데이트 확인에 실패했습니다. 네트워크를 확인해주세요.",
+                                "Update check failed. Check your network connection.",
+                                "アップデート確認に失敗しました。ネットワークを確認してください。");
+    } else if (updateUi.available) {
+      updateUi.message = uiWord("새 버전을 찾았습니다: ", "New version available: ", "新しいバージョン: ") +
+                         std::string("v") + result.latest;
+    } else {
+      updateUi.message = uiWord("현재 최신 버전입니다.", "You are up to date.", "最新バージョンです。");
+    }
+    status = updateUi.message;
+  };
+
+  auto installLauncherUpdate = [&]() {
+    if (!updateUi.available || updateUi.latestVersion.empty()) return;
+    status = uiWord("업데이트 다운로드 및 설치 중...", "Downloading and installing update...",
+                    "アップデートをダウンロードしてインストール中...");
+    const UpdateHelperResult result = runUpdateHelper(root, "install", updateUi.latestVersion);
+    updateUi.prompt = false;
+    if (result.ok && result.status == "installed") {
+      updateUi.available = false;
+      updateUi.message = uiWord("설치 완료. 런처를 종료한 뒤 다시 실행해주세요.",
+                                "Update installed. Restart the launcher to use the new version.",
+                                "インストール完了。ランチャーを再起動してください。");
+    } else {
+      updateUi.message = uiWord("업데이트 설치에 실패했습니다.", "Update installation failed.",
+                                "アップデートのインストールに失敗しました。");
+    }
+    status = updateUi.message;
+  };
+
   auto activateSettingsScreen = [&]() {
     if (!uiShell.settingsDetailFocused) {
       uiShell.settingsDetailFocused = true;
@@ -5340,6 +5612,8 @@ int main(int, char**) {
       cycleEngineFilter(1);
     } else if (uiShell.settingsRow == 3) {
       openGameFolderDialog();
+    } else if (uiShell.settingsRow == 4) {
+      checkForLauncherUpdate();
     }
   };
 
@@ -5386,8 +5660,13 @@ int main(int, char**) {
     else uiSounds.play(UiSoundKind::Boundary);
   };
   auto moveByDirection = [&](int dx, int dy) {
-    if (uiShell.sectionTransitionActive) return;
+    if (uiShell.sectionTransitionActive || uiShell.libraryPageTransitionActive) return;
     if (keyRemap.active || search.active || gameSettings.editingName) return;
+    if (updateUi.prompt) {
+      if (dx < 0) updateUi.promptYes = true;
+      if (dx > 0) updateUi.promptYes = false;
+      return;
+    }
     if (filterSort.active) {
       if (dy < 0) moveFilterSortRow(-1);
       if (dy > 0) moveFilterSortRow(1);
@@ -5445,8 +5724,8 @@ int main(int, char**) {
         return;
       }
       if (dx < 0) { uiShell.sidebarFocused = true; uiSounds.play(UiSoundKind::SidebarIn); return; }
-      if (dy < 0) { uiShell.settingsRow = (uiShell.settingsRow + 3) % 4; uiSounds.play(UiSoundKind::Move); }
-      if (dy > 0) { uiShell.settingsRow = (uiShell.settingsRow + 1) % 4; uiSounds.play(UiSoundKind::Move); }
+      if (dy < 0) { uiShell.settingsRow = (uiShell.settingsRow + 4) % 5; uiSounds.play(UiSoundKind::Move); }
+      if (dy > 0) { uiShell.settingsRow = (uiShell.settingsRow + 1) % 5; uiSounds.play(UiSoundKind::Move); }
       if (dx > 0) { uiShell.settingsDetailFocused = true; uiSounds.play(UiSoundKind::Move); }
       return;
     }
@@ -5456,6 +5735,12 @@ int main(int, char**) {
   };
 
   auto confirm = [&]() {
+    if (uiShell.sectionTransitionActive || uiShell.libraryPageTransitionActive) return;
+    if (updateUi.prompt) {
+      if (updateUi.promptYes) installLauncherUpdate();
+      else updateUi.prompt = false;
+      return;
+    }
     if (exitModal) {
       if (exitYes) running = false;
       else exitModal = false;
@@ -5729,7 +6014,7 @@ int main(int, char**) {
     }
   };
 
-  auto drawLibrary = [&]() {
+  auto drawLibraryHeader = [&]() {
     drawTopTitle(uiWord("내 라이브러리", "My Library", "マイライブラリ"),
                  filteredGameCountText(games.size(), allGames.size()));
     drawEnginePills(108, 82);
@@ -5738,6 +6023,18 @@ int main(int, char**) {
                ? uiWord("정렬 · 종류순", "Sort · Type", "並び替え · 種類")
                : uiWord("정렬 · 이름순", "Sort · Name", "並び替え · 名前"),
              1260, 90, SDL_Color{157, 181, 201, 255}, false, true);
+
+    if (gridView && !games.empty()) {
+      const int pageStart = static_cast<int>(selected / 10) * 10;
+      drawText(renderer, fonts.small,
+               std::to_string(pageStart + 1) + "-" +
+               std::to_string(std::min(pageStart + 10, static_cast<int>(games.size()))) +
+               " / " + std::to_string(games.size()),
+               1260, 55, SDL_Color{139, 164, 184, 255}, false, true);
+    }
+  };
+
+  auto drawLibraryContent = [&](int yOffset) {
 
     if (!gridView) {
       const int visible = 9;
@@ -5748,7 +6045,7 @@ int main(int, char**) {
       for (int i = 0; i < visible && scroll + i < static_cast<int>(games.size()); ++i) {
         const int index = scroll + i;
         const auto& game = games[static_cast<std::size_t>(index)];
-        const int y = 126 + i * 56;
+        const int y = 126 + yOffset + i * 56;
         const bool active = static_cast<std::size_t>(index) == selected && !uiShell.sidebarFocused;
         const SDL_Rect row{102, y, 1158, 48};
         fillRoundedRect(renderer, row, 13,
@@ -5786,7 +6083,7 @@ int main(int, char**) {
         const int col = slot % 5;
         const int rowIndex = slot / 5;
         const int x = 108 + col * (cardW + gap);
-        const int y = 126 + rowIndex * rowGap;
+        const int y = 126 + yOffset + rowIndex * rowGap;
         const SDL_Rect card{x, y, cardW, 254};
         const bool active = static_cast<std::size_t>(index) == selected && !uiShell.sidebarFocused;
 
@@ -5809,14 +6106,12 @@ int main(int, char**) {
           strokeRoundedRect(renderer, card, 16, SDL_Color{99, 140, 171, 58}, 1);
         }
       }
-      if (!games.empty()) {
-        drawText(renderer, fonts.small,
-                 std::to_string(pageStart + 1) + "-" +
-                 std::to_string(std::min(pageStart + 10, static_cast<int>(games.size()))) +
-                 " / " + std::to_string(games.size()),
-                 1260, 55, SDL_Color{139, 164, 184, 255}, false, true);
-      }
     }
+  };
+
+  auto drawLibrary = [&]() {
+    drawLibraryHeader();
+    drawLibraryContent(0);
   };
 
   auto drawSettingsScreen = [&]() {
@@ -5825,13 +6120,14 @@ int main(int, char**) {
                         "Manage only the launcher settings you actually use",
                         "必要なランチャー設定だけを管理します"));
 
-    const std::array<std::string, 4> labels{{
+    const std::array<std::string, 5> labels{{
       uiWord("보기 방식", "Library View", "表示形式"),
       uiWord("정렬", "Sorting", "並び替え"),
       uiWord("기본 필터", "Default Filter", "既定フィルター"),
-      uiWord("게임 폴더", "Game Folder", "ゲームフォルダー")
+      uiWord("게임 폴더", "Game Folder", "ゲームフォルダー"),
+      uiWord("업데이트", "Update", "アップデート")
     }};
-    const std::array<std::string, 4> descriptions{{
+    const std::array<std::string, 5> descriptions{{
       uiWord("라이브러리의 기본 표시 방식을 선택합니다.",
              "Choose the default Library layout.",
              "ライブラリの既定表示形式を選びます。"),
@@ -5843,14 +6139,18 @@ int main(int, char**) {
              "ライブラリを開いた時のエンジンフィルターを選びます。"),
       uiWord("게임을 검색할 기본 폴더를 변경합니다.",
              "Change the folder scanned for games.",
-             "ゲームを検索する既定フォルダーを変更します。")
+             "ゲームを検索する既定フォルダーを変更します。"),
+      uiWord("원할 때만 GitHub에서 새 버전을 확인하고 설치합니다.",
+             "Check GitHub for a new version only when you request it.",
+             "必要な時だけ GitHub で新しいバージョンを確認します。")
     }};
-    std::array<std::string, 4> values{{
+    std::array<std::string, 5> values{{
       gridView ? uiWord("그리드", "Grid", "グリッド") : uiWord("리스트", "List", "リスト"),
       launcherConfig.sortMode == "type" ? uiWord("종류순", "Type", "種類順")
                                         : uiWord("이름순", "Name", "名前順"),
       filterLabelAt(filterIndexFromCode(launcherConfig.engineFilter)),
-      gameRoot.string()
+      gameRoot.string(),
+      std::string("v") + APP_VERSION
     }};
 
     const SDL_Rect categoryPanel{104, 104, 242, 516};
@@ -5866,8 +6166,8 @@ int main(int, char**) {
     drawText(renderer, fonts.small, uiWord("설정 항목", "SETTINGS", "設定項目"),
              categoryPanel.x + 22, categoryPanel.y + 20, SDL_Color{125, 164, 195, 255});
 
-    const std::array<int, 4> itemY{{150, 236, 322, 408}};
-    for (int i = 0; i < 4; ++i) {
+    const std::array<int, 5> itemY{{132, 218, 304, 390, 476}};
+    for (int i = 0; i < 5; ++i) {
       const bool active = uiShell.settingsRow == i && !uiShell.sidebarFocused;
       const bool listFocus = active && !uiShell.settingsDetailFocused;
       SDL_Rect item{categoryPanel.x + 16, itemY[i], categoryPanel.w - 32, 68};
@@ -5889,7 +6189,7 @@ int main(int, char**) {
                active ? SDL_Color{174, 222, 249, 255} : SDL_Color{124, 153, 177, 255});
     }
 
-    const int activeIndex = std::clamp(uiShell.settingsRow, 0, 3);
+    const int activeIndex = std::clamp(uiShell.settingsRow, 0, 4);
     drawText(renderer, fonts.normal, labels[static_cast<std::size_t>(activeIndex)],
              detailPanel.x + 30, detailPanel.y + 24, WHITE);
     drawText(renderer, fonts.small, descriptions[static_cast<std::size_t>(activeIndex)],
@@ -5901,9 +6201,12 @@ int main(int, char**) {
 
     if (activeIndex == 0) {
       drawText(renderer, fonts.medium, uiWord("라이브러리 표시 방식", "Library layout", "ライブラリ表示形式"),
-               content.x + 26, content.y + 28, WHITE);
-      const SDL_Rect listBtn{content.x + 50, content.y + 104, 280, 72};
-      const SDL_Rect gridBtn{content.x + 374, content.y + 104, 280, 72};
+               content.x + content.w / 2, content.y + 28, WHITE, true);
+      constexpr int optionW = 280;
+      constexpr int optionGap = 44;
+      const int optionStartX = content.x + (content.w - (optionW * 2 + optionGap)) / 2;
+      const SDL_Rect listBtn{optionStartX, content.y + 104, optionW, 72};
+      const SDL_Rect gridBtn{optionStartX + optionW + optionGap, content.y + 104, optionW, 72};
       const bool listOn = !gridView;
       const bool gridOn = gridView;
       fillRoundedRect(renderer, listBtn, 18, listOn ? SDL_Color{31, 102, 165, 220} : SDL_Color{11, 38, 61, 180});
@@ -5922,9 +6225,12 @@ int main(int, char**) {
                gridBtn.x + gridBtn.w / 2, gridBtn.y + 22, gridOn ? WHITE : SDL_Color{182, 201, 218, 255}, true);
     } else if (activeIndex == 1) {
       drawText(renderer, fonts.medium, uiWord("기본 정렬", "Default sorting", "既定の並び順"),
-               content.x + 26, content.y + 28, WHITE);
-      const SDL_Rect nameBtn{content.x + 50, content.y + 104, 280, 72};
-      const SDL_Rect typeBtn{content.x + 374, content.y + 104, 280, 72};
+               content.x + content.w / 2, content.y + 28, WHITE, true);
+      constexpr int optionW = 280;
+      constexpr int optionGap = 44;
+      const int optionStartX = content.x + (content.w - (optionW * 2 + optionGap)) / 2;
+      const SDL_Rect nameBtn{optionStartX, content.y + 104, optionW, 72};
+      const SDL_Rect typeBtn{optionStartX + optionW + optionGap, content.y + 104, optionW, 72};
       const bool nameOn = launcherConfig.sortMode != "type";
       const bool typeOn = !nameOn;
       fillRoundedRect(renderer, nameBtn, 18, nameOn ? SDL_Color{31, 102, 165, 220} : SDL_Color{11, 38, 61, 180});
@@ -5943,15 +6249,17 @@ int main(int, char**) {
                typeBtn.x + typeBtn.w / 2, typeBtn.y + 22, typeOn ? WHITE : SDL_Color{182, 201, 218, 255}, true);
     } else if (activeIndex == 2) {
       drawText(renderer, fonts.medium, uiWord("기본 엔진 필터", "Default engine filter", "既定エンジンフィルター"),
-               content.x + 26, content.y + 28, WHITE);
+               content.x + content.w / 2, content.y + 28, WHITE, true);
       const int chipW = 150;
       const int chipH = 48;
       const int gapX = 18;
       const int gapY = 18;
+      const int chipGroupW = chipW * 4 + gapX * 3;
+      const int chipStartX = content.x + (content.w - chipGroupW) / 2;
       for (int i = 0; i < 8; ++i) {
         const int col = i % 4;
         const int row = i / 4;
-        SDL_Rect chip{content.x + 28 + col * (chipW + gapX),
+        SDL_Rect chip{chipStartX + col * (chipW + gapX),
                       content.y + 92 + row * (chipH + gapY), chipW, chipH};
         const bool chosen = launcherConfig.engineFilter == filterCodeAt(i);
         fillRoundedRect(renderer, chip, 16, chosen ? SDL_Color{31, 102, 165, 222} : SDL_Color{11, 38, 61, 178});
@@ -5962,7 +6270,7 @@ int main(int, char**) {
         drawText(renderer, fonts.small, filterLabelAt(i), chip.x + chip.w / 2, chip.y + 13,
                  chosen ? WHITE : SDL_Color{180, 201, 218, 255}, true);
       }
-    } else {
+    } else if (activeIndex == 3) {
       drawText(renderer, fonts.medium, uiWord("게임 검색 폴더", "Game folder", "ゲーム検索フォルダー"),
                content.x + 26, content.y + 28, WHITE);
       SDL_Rect pathBox{content.x + 28, content.y + 95, content.w - 56, 64};
@@ -5978,11 +6286,48 @@ int main(int, char**) {
                       "Press A or Right to choose another folder",
                       "A または右入力でフォルダーを変更します"),
                content.x + 28, content.y + 190, SDL_Color{137, 166, 189, 255});
+    } else {
+      drawText(renderer, fonts.medium, uiWord("RPG Maker Player 업데이트", "RPG Maker Player Update", "RPG Maker Player アップデート"),
+               content.x + content.w / 2, content.y + 24, WHITE, true);
+      drawText(renderer, fonts.small,
+               uiWord("현재 버전", "Current version", "現在のバージョン") + std::string(": v") + APP_VERSION,
+               content.x + 34, content.y + 76, SDL_Color{186, 210, 229, 255});
+      if (updateUi.checked && !updateUi.latestVersion.empty()) {
+        drawText(renderer, fonts.small,
+                 uiWord("확인된 최신 버전", "Latest version", "確認した最新バージョン") +
+                   std::string(": v") + updateUi.latestVersion,
+                 content.x + 34, content.y + 108, SDL_Color{186, 210, 229, 255});
+      }
+      SDL_Rect checkBtn{content.x + 34, content.y + 156, 250, 58};
+      fillRoundedRect(renderer, checkBtn, 16, SDL_Color{31, 102, 165, 220});
+      strokeRoundedRect(renderer, checkBtn, 16,
+                        uiShell.settingsDetailFocused ? SDL_Color{122, 214, 255, 230}
+                                                      : SDL_Color{88, 132, 164, 70},
+                        uiShell.settingsDetailFocused ? 2 : 1);
+      drawText(renderer, fonts.medium, uiWord("업데이트 확인", "Check for updates", "アップデート確認"),
+               checkBtn.x + checkBtn.w / 2, checkBtn.y + 17, WHITE, true);
+      if (!updateUi.message.empty()) {
+        drawText(renderer, fonts.small, truncateText(fonts.small, updateUi.message, content.w - 360),
+                 content.x + 320, content.y + 176, SDL_Color{152, 189, 215, 255});
+      }
+      if (updateUi.prompt) {
+        drawText(renderer, fonts.medium,
+                 uiWord("다운로드 후 설치하시겠습니까?", "Download and install this update?", "ダウンロードしてインストールしますか？"),
+                 content.x + content.w / 2, content.y + 232, WHITE, true);
+        SDL_Rect yesBtn{content.x + content.w / 2 - 170, content.y + 260, 150, 46};
+        SDL_Rect noBtn{content.x + content.w / 2 + 20, content.y + 260, 150, 46};
+        fillRoundedRect(renderer, yesBtn, 14, updateUi.promptYes ? SDL_Color{31, 102, 165, 230} : SDL_Color{11, 38, 61, 180});
+        fillRoundedRect(renderer, noBtn, 14, !updateUi.promptYes ? SDL_Color{31, 102, 165, 230} : SDL_Color{11, 38, 61, 180});
+        drawText(renderer, fonts.medium, uiWord("예", "Yes", "はい"), yesBtn.x + yesBtn.w / 2, yesBtn.y + 12, WHITE, true);
+        drawText(renderer, fonts.medium, uiWord("아니오", "No", "いいえ"), noBtn.x + noBtn.w / 2, noBtn.y + 12, WHITE, true);
+      }
     }
 
     const std::string settingsHelp = uiShell.settingsDetailFocused
       ? (activeIndex == 3
           ? uiWord("A  폴더 선택     B  목록으로", "A Choose folder     B Back to list", "A フォルダー選択     B 一覧へ")
+          : activeIndex == 4
+          ? uiWord("A  업데이트 확인     B  목록으로", "A Check for updates     B Back to list", "A アップデート確認     B 一覧へ")
           : uiWord("← →  값 변경     B  목록으로", "← → Change value     B Back to list", "← → 値を変更     B 一覧へ"))
       : uiWord("A  세부 설정     ↑↓  항목 이동", "A Open details     ↑↓ Move", "A 詳細設定     ↑↓ 移動");
     drawText(renderer, fonts.small, settingsHelp,
@@ -6237,7 +6582,9 @@ int main(int, char**) {
             if (!exitModal && !uiShell.sidebarFocused && uiShell.section != MainSection::Settings) openGameSettings();
             break;
           case SDLK_ESCAPE:
-            if (uiShell.section == MainSection::Settings && uiShell.settingsDetailFocused) {
+            if (updateUi.prompt) {
+              updateUi.prompt = false;
+            } else if (uiShell.section == MainSection::Settings && uiShell.settingsDetailFocused) {
               uiShell.settingsDetailFocused = false;
             } else {
               exitModal = !exitModal;
@@ -6250,7 +6597,6 @@ int main(int, char**) {
             break;
           case SDLK_v: if (!exitModal && uiShell.section == MainSection::Library) toggleViewMode(); break;
           case SDLK_F2: if (!exitModal) openGameFolderDialog(); break;
-          case SDLK_F3: if (!exitModal) openFilterSort(); break;
           case SDLK_F4: if (!exitModal) openSearch(); break;
           case SDLK_PAGEUP: if (!exitModal && uiShell.section == MainSection::Library) movePage(-1); break;
           case SDLK_PAGEDOWN: if (!exitModal && uiShell.section == MainSection::Library) movePage(1); break;
@@ -6265,7 +6611,8 @@ int main(int, char**) {
           case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: moveByDirection(1, 0); break;
           case SDL_CONTROLLER_BUTTON_A: confirm(); break;
           case SDL_CONTROLLER_BUTTON_B:
-            if (exitModal) exitModal = false;
+            if (updateUi.prompt) updateUi.prompt = false;
+            else if (exitModal) exitModal = false;
             else if (uiShell.sidebarFocused) {
               uiShell.sidebarFocused = false;
               uiSounds.play(UiSoundKind::SidebarOut);
@@ -6318,7 +6665,6 @@ int main(int, char**) {
           selectTapCandidate = false;
           comboLatched = false;
         } else if (event.cbutton.button == SDL_CONTROLLER_BUTTON_START) {
-          if (startTapCandidate && !selectHeld && !exitModal) openFilterSort();
           startHeld = false;
           startTapCandidate = false;
           comboLatched = false;
@@ -6405,7 +6751,7 @@ int main(int, char**) {
 
     const float sidebarTarget = uiShell.sidebarFocused ? 1.0f : 0.0f;
     const bool sidebarAnimating = std::abs(sidebarTarget - uiShell.sidebarAnim) >= 0.01f;
-    const bool timedUiActive = uiShell.sectionTransitionActive || sidebarAnimating ||
+    const bool timedUiActive = uiShell.sectionTransitionActive || uiShell.libraryPageTransitionActive || sidebarAnimating ||
                                startHeld || selectHeld || analogXDir != 0 || analogYDir != 0 ||
                                triggerL2Held || triggerR2Held;
     const Uint64 redrawNow = SDL_GetTicks64();
@@ -6449,6 +6795,35 @@ int main(int, char**) {
       drawLibrary();
 
       if (raw >= 1.0f) uiShell.sectionTransitionActive = false;
+    } else if (uiShell.libraryPageTransitionActive && uiShell.section == MainSection::Library) {
+      constexpr float LIBRARY_PAGE_TRANSITION_MS = 260.0f;
+      const float raw = std::clamp(
+        static_cast<float>(now - uiShell.libraryPageTransitionStartedAt) / LIBRARY_PAGE_TRANSITION_MS,
+        0.0f, 1.0f);
+      const float inv = 1.0f - raw;
+      const float eased = 1.0f - inv * inv * inv;
+      const int slideY = static_cast<int>(std::lround(eased * static_cast<float>(HEIGHT)));
+      const int direction = uiShell.libraryPageTransitionDirection;
+      const std::size_t liveSelected = selected;
+      const int liveScroll = scroll;
+
+      SDL_RenderSetViewport(renderer, &uiViewport);
+      drawLibraryHeader();
+      const SDL_Rect libraryContentClip{92, 118, WIDTH - 92, 532};
+      SDL_RenderSetClipRect(renderer, &libraryContentClip);
+
+      selected = uiShell.libraryPageTransitionFromSelected;
+      scroll = uiShell.libraryPageTransitionFromScroll;
+      drawLibraryContent(-direction * slideY);
+
+      selected = uiShell.libraryPageTransitionToSelected;
+      scroll = uiShell.libraryPageTransitionToScroll;
+      drawLibraryContent(direction * (HEIGHT - slideY));
+
+      selected = liveSelected;
+      scroll = liveScroll;
+      SDL_RenderSetClipRect(renderer, nullptr);
+      if (raw >= 1.0f) uiShell.libraryPageTransitionActive = false;
     } else {
       uiShell.sectionTransitionActive = false;
       SDL_RenderSetViewport(renderer, &uiViewport);

@@ -25,6 +25,7 @@ target_link_libraries(MKXP_Launcher PRIVATE
   PkgConfig::SDL2
   PkgConfig::SDL2_TTF
   PkgConfig::SDL2_IMAGE
+  ${CMAKE_DL_LIBS}
 )
 
 target_compile_options(MKXP_Launcher PRIVATE -Wall -Wextra -Wpedantic)

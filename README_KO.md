@@ -6,14 +6,16 @@
 
 **RPG Maker Player**는 SteamOS용 RPG Maker / WOLF RPG Editor 올인원 런처입니다. 하나의 게임 루트를 스캔해 엔진과 필요한 런타임을 판별하고 각 게임에 맞는 실행 방식을 자동으로 선택합니다.
 
-## v1.2 업데이트
+## v1.3 업데이트
 
-- 게임 실행 중에도 런처 frontend surface를 유지해 SteamOS 슬립/복귀 후 게임 실행과 런처 복귀 안정성을 개선했습니다.
-- 중복 런처 실행을 막는 single-instance 보호를 추가했습니다.
-- idle dirty-render와 느린 대기 polling으로 런처 대기 중 CPU/전력 사용을 줄였습니다.
-- 게임 중 종료는 팝업 없이 **Start + Select를 1.5초 계속 누르면 즉시 종료**하는 방식으로 단순화했습니다.
-- RGSS, MV/MZ, EasyRPG, WOLF/Proton 및 부모 런처 fallback 입력까지 모두 같은 1.5초 hold 기준을 사용하며, 종료되지 않고 남는 자식 프로세스는 process-group 단위로 정리합니다.
-- v1.2 Windows-safe 패키지는 업데이트 시 launcher 설정, catalogs, cache/log 내용, `game/gamelist.json`을 덮어쓰지 않습니다.
+- 설정의 **게임 폴더 아래에 `업데이트` 항목**을 추가했습니다. 현재 버전을 표시하고 사용자가 **업데이트 확인**을 눌렀을 때만 GitHub를 확인합니다. 런처 실행 시 자동 확인은 하지 않습니다.
+- 새 버전이 있으면 최신 버전을 표시하고 다운로드 후 설치 여부를 묻습니다. OTA 패키지는 SHA-256 검증 후 설치합니다.
+- 게임 실행 중 **Select + X**로 SteamOS 가상키보드를 수동 호출할 수 있습니다. 열기 전용이며 닫기는 SteamOS 기본 키보드 조작을 사용합니다.
+- **RPG Maker XP / VX / VX Ace도 게임별 설정에서 Proton 호환 실행**을 사용할 수 있습니다. native mkxp-z로 호환되지 않는 게임의 fallback으로 사용할 수 있으며 MV/MZ도 같은 Proton 호환 경로를 지원합니다.
+- Ruby 1.8 / 1.9 / 3.1 공통 Win32API/DLL 정규화와 rpgmakermlinux-cicpoffs/Kawariki 기반 조건부 RGSS 호환 패치/포트를 확대했습니다.
+- RPG Maker Player 설치 경로에 공백이 있을 때 Ruby 1.9가 실행되지 않던 문제를 수정했습니다.
+- 게임 중 **Start + Select 1.5초 유지**로 현재 게임을 팝업 없이 종료하는 기능은 그대로 유지됩니다.
+- 풀버전과 업데이트판 모두 launcher 설정, catalogs, 게임목록, cache/log 및 사용자 게임 데이터는 덮어쓰지 않습니다.
 
 ## 스크린샷
 
@@ -28,9 +30,9 @@
 | 엔진 | 실행 방식 | 주요 기능 |
 |---|---|---|
 | RPG Maker 2000 / 2003 | EasyRPG Player | 폴더 게임 및 `.zip` / `.easyrpg`, 게임별 인코딩 지원 |
-| RPG Maker XP | mkxp-z | Ruby 1.8 / 1.9 / 3.1 자동 판별, 수동 지정, 정밀 스캔 |
-| RPG Maker VX | mkxp-z | Ruby 1.8 / 1.9 / 3.1 자동 판별, 수동 지정, 정밀 스캔 |
-| RPG Maker VX Ace | mkxp-z | Ruby 1.8 / 1.9 / 3.1 자동 판별, 수동 지정, 정밀 스캔 |
+| RPG Maker XP | mkxp-z / 선택적 Proton | Ruby 1.8 / 1.9 / 3.1 자동 판별, 수동 지정, 정밀 스캔, Proton fallback |
+| RPG Maker VX | mkxp-z / 선택적 Proton | Ruby 1.8 / 1.9 / 3.1 자동 판별, 수동 지정, 정밀 스캔, Proton fallback |
+| RPG Maker VX Ace | mkxp-z / 선택적 Proton | Ruby 1.8 / 1.9 / 3.1 자동 판별, 수동 지정, 정밀 스캔, Proton fallback |
 | RPG Maker MV | NW.js | 런타임 자동 선택, 호환성 검사, 대소문자 경로 보정 |
 | RPG Maker MZ | NW.js | 런타임 자동 선택, 호환성 검사, 대소문자 경로 보정 |
 | WOLF RPG Editor | Proton | Steam Proton 기반 실행, 창모드 호환 처리 |
@@ -49,8 +51,8 @@ Steam/데스크톱/시스템 로케일 정보를 이용해 언어를 감지합�
 
 ## SteamOS 설치 방법
 
-1. v1.2 Release에서 **`RPG_Maker_Player_SteamOS_WINDOWS_SAFE.tar.gz`**를 다운로드합니다.
-2. 압축을 풉니다. Windows에서 압축을 풀어도 됩니다. v1.2 Windows-safe 패키지는 Linux 심볼릭 링크를 제거한 배포본입니다.
+1. v1.3 Release에서 **`RPG_Maker_Player_SteamOS_V1.3.tar.gz`**를 다운로드합니다.
+2. 압축을 풉니다. Windows에서 압축을 풀어도 됩니다.
 3. 압축 해제된 **`rpg maker player`** 폴더를 SteamOS 기기로 복사합니다.
 4. SteamOS **Desktop Mode**로 들어갑니다.
 5. 폴더 안의 **`RPG Maker Player.desktop`**을 실행합니다.
@@ -107,9 +109,10 @@ Games/
 | LB / RB | 이전 / 다음 페이지 |
 | LT / RT | 엔진 필터 빠른 전환 |
 | Select 짧게 | 선택한 게임 설정 열기 |
-| Start 짧게 | 필터 / 정렬 열기 |
+| Start 짧게 | 라이브러리에서 단독 기능 없음 |
 | Start + Select 약 0.3초 (런처 화면) | 런처 종료 확인창 |
 | Start + Select 1.5초 유지 (게임 실행 중) | 팝업 없이 현재 게임 즉시 종료 |
+| Select + X (게임 실행 중) | SteamOS 가상키보드 열기 |
 
 ### 폴더 선택 화면
 
@@ -128,6 +131,8 @@ Games/
 | 왼쪽 / 오른쪽 | 값 변경 |
 | A | 적용 / 선택 항목 실행 |
 | B | 설정 닫기 |
+
+XP / VX / VX Ace / MV / MZ는 게임별 설정에서 **Proton 호환 실행**을 켜고 Proton 런타임/환경 프리셋을 선택할 수 있습니다. native 실행이 맞지 않는 게임의 fallback으로 사용합니다.
 
 ### 게임별 패드 키 설정
 
@@ -158,13 +163,25 @@ Games/
 EasyRPG Player를 사용합니다. 한국어 CP949, 일본어 CP932, 서구권 CP1252 계열 인코딩 프로필을 지원합니다. `.zip` 또는 `.easyrpg` 단독 패키지도 EasyRPG 게임으로 감지할 수 있습니다.
 
 ### RPG Maker XP / VX / VX Ace
-mkxp-z를 사용합니다. Ruby 1.8 / 1.9 / 3.1 호환성을 자동 판별하고 결과를 캐시합니다. 게임 설정에서 수동 런타임 선택 또는 더 엄밀한 Ruby 정밀 스캔도 사용할 수 있습니다.
+기본적으로 mkxp-z를 사용합니다. Ruby 1.8 / 1.9 / 3.1 호환성을 자동 판별하고 결과를 캐시합니다. 게임 설정에서 수동 런타임 선택 또는 Ruby 정밀 스캔을 사용할 수 있으며, native 경로에는 확장된 Win32API/DLL 호환과 조건부 RGSS 플러그인 패치가 포함됩니다. Windows 전용 스크립트/DLL 때문에 native 실행이 어려운 게임은 게임별 설정에서 **Proton 호환 실행**을 켤 수 있습니다.
 
 ### RPG Maker MV / MZ
 NW.js 런타임을 자동 선택합니다. Windows에서 제작된 게임의 Linux 대소문자 경로 문제를 완화하기 위한 case-insensitive 보조 기능도 포함됩니다.
 
 ### WOLF RPG Editor
 Steam Proton을 통해 실행합니다. 필요한 경우 Proton Experimental 설치를 Steam에 요청할 수 있습니다. SteamOS/Gamescope가 전체화면 표시를 담당하므로 게임 자체는 호환성을 위해 창모드 실행 경로를 사용합니다.
+
+## 수동 업데이트 / OTA
+
+**설정 → 업데이트**에서 현재 설치 버전을 확인할 수 있습니다. 런처를 실행할 때는 GitHub에 자동으로 접속하지 않습니다.
+
+1. **업데이트 확인**을 누릅니다.
+2. 새 버전이 있으면 최신 버전 번호가 표시됩니다.
+3. **다운로드 후 설치** 여부를 확인합니다.
+4. 승인하면 해당 OTA 패키지와 SHA-256 파일을 받아 검증한 뒤 앱 파일만 설치합니다.
+5. 설치가 완료되면 RPG Maker Player를 종료한 뒤 다시 실행합니다.
+
+인앱 업데이트 기능이 아직 없는 구버전 사용자를 위해 v1.3 Release에는 **`RPG_Maker_Player_SteamOS_Update_V1.3.tar.gz`**도 제공합니다. v1.0 이상 설치본 위에 덮어쓰는 누적 업데이트판이며 사용자 게임/설정 데이터는 교체하지 않습니다.
 
 ## Steam 아트워크
 

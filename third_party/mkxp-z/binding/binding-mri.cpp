@@ -1044,6 +1044,7 @@ static void runRMXPScripts(BacktraceData &btData) {
             "ruby_classic_wrap.rb",
             "mkxp_wrap.rb",
             "win32_wrap.rb",
+            "cicpoffs_compat.rb",
             "fix_volume.rb",
         };
         for (const char *name : portablePreloads) {

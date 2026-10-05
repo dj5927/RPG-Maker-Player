@@ -12,5 +12,6 @@
 *.so
 *.a
 *.tar.gz
+!release-assets/*.tar.gz
 .DS_Store
 Thumbs.db

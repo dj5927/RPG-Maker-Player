@@ -6,14 +6,16 @@
 
 **RPG Maker Player** is a SteamOS-focused all-in-one launcher for RPG Maker and WOLF RPG Editor games. It scans one game library folder, detects the engine/runtime, and launches games through the appropriate compatibility layer.
 
-## What's new in v1.2
+## What's new in v1.3
 
-- Improved SteamOS suspend/resume reliability by keeping the launcher frontend mapped while a game is running.
-- Added single-instance protection to prevent duplicate launcher processes after resume or repeated launches.
-- Reduced launcher idle CPU/power use with dirty-rendering and slower idle polling.
-- Simplified in-game exit handling: hold **Start + Select for 1.5 seconds** to exit the current game directly with no popup.
-- Unified the 1.5-second exit hold across RGSS, MV/MZ, EasyRPG, WOLF/Proton and launcher fallback input paths, with process-group cleanup for stubborn child processes.
-- The v1.2 Windows-safe package is update-safe and does not overwrite launcher config, catalogs, cache/log contents, or `game/gamelist.json`.
+- Added an **Update** item under Settings. It shows the current version and only checks GitHub when you explicitly press **Check for updates**. There is no automatic update check at startup.
+- When a newer release exists, the launcher shows the new version and asks whether to download and install it. OTA packages are SHA-256 verified before extraction.
+- In-game **Select + X** manually opens the SteamOS on-screen keyboard. It is open-only; closing the keyboard uses SteamOS's normal keyboard controls.
+- **RPG Maker XP / VX / VX Ace can use Proton compatibility mode** from per-game settings as a fallback when native mkxp-z compatibility is not enough. MV/MZ can use the same Proton compatibility path.
+- Expanded native RGSS compatibility across Ruby 1.8 / 1.9 / 3.1 with Win32API/DLL normalization and conditional compatibility patches/ports derived from rpgmakermlinux-cicpoffs/Kawariki work.
+- Fixed Ruby 1.9 launch failures when RPG Maker Player is installed in a path containing spaces.
+- Hold **Start + Select for 1.5 seconds** while a game is running to terminate the current game directly with no popup.
+- The full and update packages preserve launcher settings, catalogs, game list, cache/log data and user game content.
 
 ## Screenshots
 
@@ -28,9 +30,9 @@
 | Engine | Runtime / method | Notes |
 |---|---|---|
 | RPG Maker 2000 / 2003 | EasyRPG Player | Folder games plus `.zip` / `.easyrpg` packages; per-game encoding support |
-| RPG Maker XP | mkxp-z | Ruby 1.8 / 1.9 / 3.1 auto detection, manual override, deep compatibility scan |
-| RPG Maker VX | mkxp-z | Ruby 1.8 / 1.9 / 3.1 auto detection, manual override, deep compatibility scan |
-| RPG Maker VX Ace | mkxp-z | Ruby 1.8 / 1.9 / 3.1 auto detection, manual override, deep compatibility scan |
+| RPG Maker XP | mkxp-z / optional Proton | Ruby 1.8 / 1.9 / 3.1 auto detection, manual override, deep compatibility scan, Proton fallback |
+| RPG Maker VX | mkxp-z / optional Proton | Ruby 1.8 / 1.9 / 3.1 auto detection, manual override, deep compatibility scan, Proton fallback |
+| RPG Maker VX Ace | mkxp-z / optional Proton | Ruby 1.8 / 1.9 / 3.1 auto detection, manual override, deep compatibility scan, Proton fallback |
 | RPG Maker MV | NW.js | Automatic runtime selection, compatibility scan, case-insensitive path helpers |
 | RPG Maker MZ | NW.js | Automatic runtime selection, compatibility scan, case-insensitive path helpers |
 | WOLF RPG Editor | Proton | Steam Proton launch path with windowed compatibility handling |
@@ -47,8 +49,8 @@ The launcher detects Steam / desktop / system locale information. Per-game local
 
 ## Installation on SteamOS
 
-1. Download **`RPG_Maker_Player_SteamOS_WINDOWS_SAFE.tar.gz`** from the v1.2 Release.
-2. Extract it. Extraction on Windows is supported; the v1.2 Windows-safe package contains no Linux symlinks.
+1. Download **`RPG_Maker_Player_SteamOS_V1.3.tar.gz`** from the v1.3 Release.
+2. Extract it. Extraction on Windows is supported.
 3. Copy the extracted **`rpg maker player`** folder to your SteamOS device.
 4. Enter **Desktop Mode**.
 5. Run **`RPG Maker Player.desktop`** inside the folder.
@@ -105,9 +107,10 @@ The launcher watches thumbnail changes and reloads replaced PNG files while it i
 | LB / RB | Previous / next page |
 | LT / RT | Quick-cycle engine filter |
 | Select (tap) | Open selected game's settings |
-| Start (tap) | Open filter / sort |
+| Start (tap) | No standalone action in the Library |
 | Start + Select (hold ~0.3 sec, launcher screen) | Open launcher exit confirmation |
 | Start + Select (hold 1.5 sec, while a game is running) | Exit the current game directly; no popup |
+| Select + X (while a game is running) | Open the SteamOS on-screen keyboard |
 
 ### Folder picker
 
@@ -126,6 +129,8 @@ The launcher watches thumbnail changes and reloads replaced PNG files while it i
 | Left / Right | Change value |
 | A | Apply / open selected setting |
 | B | Close settings |
+
+For XP / VX / VX Ace / MV / MZ, per-game settings can enable **Proton compatibility mode** and select a Proton runtime/environment preset when native execution is not compatible enough.
 
 ### Per-game controller remapping
 
@@ -156,13 +161,25 @@ The launcher watches thumbnail changes and reloads replaced PNG files while it i
 EasyRPG Player is used. Korean CP949, Japanese CP932 and Western CP1252-style encoding profiles are supported. Standalone `.zip` and `.easyrpg` packages can be detected as EasyRPG titles.
 
 ### RPG Maker XP / VX / VX Ace
-mkxp-z is used. The launcher can auto-detect Ruby compatibility across 1.8, 1.9 and 3.1, cache the result, manually override it, or run a deeper script compatibility scan from per-game settings.
+mkxp-z is used by default. The launcher can auto-detect Ruby compatibility across 1.8, 1.9 and 3.1, cache the result, manually override it, or run a deeper script compatibility scan from per-game settings. The native path includes expanded Win32API/DLL compatibility and conditional RGSS plugin patches. If a Windows-only script or DLL still prevents native execution, enable **Proton compatibility mode** for that game from per-game settings.
 
 ### RPG Maker MV / MZ
 NW.js runtimes are selected automatically. The launcher also includes case-insensitive filesystem/path compatibility helpers for Windows-authored game data.
 
 ### WOLF RPG Editor
 WOLF games run through Steam Proton. Proton Experimental can be requested through Steam if needed. The launcher uses a windowed compatibility path because SteamOS/Gamescope handles fullscreen presentation itself.
+
+## Manual updates / OTA
+
+Open **Settings → Update** to see the installed version. The launcher does **not** contact GitHub automatically at startup.
+
+1. Select **Check for updates**.
+2. If a newer release exists, its version is displayed.
+3. Confirm **Download and install**.
+4. The launcher downloads the matching OTA package, verifies its SHA-256 file, and installs only application files.
+5. Restart RPG Maker Player after installation.
+
+For older installations that do not yet contain the in-app updater, the v1.3 Release also provides **`RPG_Maker_Player_SteamOS_Update_V1.3.tar.gz`**, a cumulative update package intended to be overlaid on a v1.0-or-newer installation without replacing user game/config data.
 
 ## Steam artwork
 

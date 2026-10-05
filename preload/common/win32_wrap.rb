@@ -378,6 +378,69 @@ module Win32API_Impl
 			end
 		end
 		class FindWindow < FindWindowA; end
+		class FindWindowEx
+			def call(args); return 42; end
+		end
+		class MapVirtualKeyEx
+			def call(args)
+				code = args[0].to_i
+				layout = args[2].to_i
+				return 0 unless layout == 0
+				return code
+			end
+		end
+		class GetKeyboardLayout
+			def call(args); return 0; end
+		end
+		class SetForegroundWindow
+			def call(args); return 1; end
+		end
+		class GetWindowTextLength
+			def call(args)
+				return 0 unless args[0].to_i == 42
+				return defined?($MKXP_WIN32_WINDOW_TITLE) ? $MKXP_WIN32_WINDOW_TITLE.to_s.size : 11
+			end
+		end
+		class GetWindowText
+			def call(args)
+				return 0 unless args[0].to_i == 42
+				title = defined?($MKXP_WIN32_WINDOW_TITLE) ? $MKXP_WIN32_WINDOW_TITLE.to_s : 'RGSS Player'
+				max = [args[2].to_i - 1, 0].max
+				text = title[0, max] || ''
+				memcpy_string(args[1], text + "\0")
+				return text.size
+			end
+		end
+		class MessageBoxA
+			def call(args)
+				type = args[3].to_i & 0xF
+				return 6 if type == 4 || type == 3
+				return 3 if type == 2
+				return 1
+			end
+		end
+		class MessageBox < MessageBoxA; end
+		class ToUnicodeEx
+			def call(args)
+				vk = args[0].to_i
+				buf = args[3]
+				max = args[4].to_i
+				ch = nil
+				if vk >= 0x41 && vk <= 0x5A
+					ch = vk.chr
+				elsif vk >= 0x30 && vk <= 0x39
+					ch = vk.chr
+				elsif vk == 0x20
+					ch = ' '
+				elsif vk == 0x0D
+					ch = "\r"
+				end
+				return 0 if ch.nil?
+				return 1 if buf.nil? || max <= 0
+				memcpy_string(buf, ch + "\0")
+				return 1
+			end
+		end
 	end
 	module Kernel32
 		class GetPrivateProfileString
@@ -403,9 +466,77 @@ module Win32API_Impl
 				return value.bytesize
 			end
 		end
+		class GetPrivateProfileStringA < GetPrivateProfileString; end
+		class GetPrivateProfileInt
+			def call(args)
+				section, key, default_value, filename = args
+				buf = "\0" * 256
+				GetPrivateProfileString.new.call([section, key, default_value.to_s, buf, 256, filename])
+				text = buf.split("\0", 2)[0].to_s
+				return text.empty? ? default_value.to_i : text.to_i
+			end
+		end
+		class GetPrivateProfileIntA < GetPrivateProfileInt; end
 		class WritePrivateProfileString
 			def call(args); return 1; end
 		end
+		class WritePrivateProfileStringA < WritePrivateProfileString; end
+		class RtlZeroMemory
+			def call(args)
+				dst, len = args[0], args[1].to_i
+				return 0 unless dst.respond_to?(:[]=) && len > 0
+				dst[0, len] = "\0" * len
+				return 0
+			end
+		end
+		class RtlMoveMemory
+			def call(args)
+				dst, src, len = args[0], args[1], args[2].to_i
+				return 0 unless dst.respond_to?(:[]=) && src.respond_to?(:[])
+				dst[0, len] = src[0, len]
+				return 0
+			end
+		end
+		class WideCharToMultiByte
+			def call(args)
+				src, wide_len, dst, dst_size = args[2].to_s, args[3].to_i, args[4], args[5].to_i
+				bytes = src
+				bytes = bytes[0, wide_len * 2] if wide_len > 0
+				out = ''
+				i = 0
+				while i + 1 < bytes.size
+					lo = bytes[i]
+					lo = lo.ord if lo.respond_to?(:ord)
+					hi = bytes[i + 1]
+					hi = hi.ord if hi.respond_to?(:ord)
+					break if lo.to_i == 0 && hi.to_i == 0
+					out << (lo.to_i & 0xFF).chr
+					i += 2
+				end
+				return out.size if dst.nil? || dst_size <= 0
+				out = out[0, [dst_size - 1, 0].max] || ''
+				memcpy_string(dst, out + "\0")
+				return out.size
+			end
+		end
+		class WideCharToMultiByteA < WideCharToMultiByte; end
+		class MultiByteToWideChar
+			def call(args)
+				src, src_len, dst, dst_size = args[2].to_s, args[3].to_i, args[4], args[5].to_i
+				src = src[0, src_len] if src_len > 0
+				src = src.split("\0", 2)[0] if src_len < 0
+				out = ''
+				src.each_byte { |b| out << b.chr << "\0" }
+				out << "\0\0" if src_len < 0
+				return out.size / 2 if dst.nil? || dst_size <= 0
+				out = out[0, dst_size * 2] || ''
+				memcpy_string(dst, out)
+				return out.size / 2
+			end
+		end
+		class MultiByteToWideCharA < MultiByteToWideChar; end
+		class MessageBoxA < Win32API_Impl::User32::MessageBoxA; end
+		class MessageBox < MessageBoxA; end
 	end
 
 	module Gdi32
@@ -416,11 +547,44 @@ module Win32API_Impl
 			def call(args); return 1; end
 		end
 	end
+
+	module Xinput1_3
+		class XInputGetState
+			def call(args); return 0; end
+		end
+	end
+	XINPUT1_3 = Xinput1_3 unless const_defined?(:XINPUT1_3)
+
+	module Steam_api
+		class SteamAPI_Init
+			def call(args); return 1; end
+		end
+		class SteamAPI_Shutdown
+			def call(args); return 0; end
+		end
+	end
+	Steam_api64 = Steam_api unless const_defined?(:Steam_api64)
 end
 
 def kappatalize(s)
+	s = s.to_s.dup
+	return s if s.empty?
 	s[0, 1] = s[0, 1].upcase
 	return s
+end
+
+def win32api_const_name(value, strip_dll = false)
+	s = value.to_s.dup
+	# RGSS plugins commonly pass Windows paths such as System/WFExit or
+	# System\\WFExit.dll.  These are valid DLL paths but invalid Ruby constant
+	# names, so reduce them to the DLL basename before looking for a Ruby shim.
+	s = s.tr('\\', '/')
+	parts = s.split('/')
+	s = parts.empty? ? s : parts[-1]
+	s = s.sub(/\.dll\z/i, '') if strip_dll
+	s = kappatalize(s)
+	return nil unless s =~ /\A[A-Z][A-Za-z0-9_]*\z/
+	s
 end
 
 class Win32API
@@ -430,20 +594,25 @@ class Win32API
 
 	alias_method :mkxp_native_initialize, :initialize
 	def initialize(dll, func, *args)
-		@dll = dll
-		@func = func
+		@dll = dll.to_s
+		@func = func.to_s
 		@called = false
 
-		dll = kappatalize(dll.chomp(".dll"))
-		func = kappatalize(func)
+		dll_const = win32api_const_name(@dll, true)
+		func_const = win32api_const_name(@func, false)
 
 		if !System.is_windows? or !NATIVE_ON_WINDOWS
-			if Win32API_Impl.const_defined?(dll)
-				dll_impl = Win32API_Impl.const_get(dll)
-				if dll_impl.const_defined?(func)
-					@mkxp_wrap_impl = dll_impl.const_get(func).new
-					return
+			begin
+				if dll_const && func_const && Win32API_Impl.const_defined?(dll_const)
+					dll_impl = Win32API_Impl.const_get(dll_const)
+					if dll_impl.const_defined?(func_const)
+						@mkxp_wrap_impl = dll_impl.const_get(func_const).new
+						return
+					end
 				end
+			rescue NameError
+				# A malformed/plugin-specific DLL or export name must never abort the
+				# whole game while looking for a Linux-side compatibility shim.
 			end
 		end
 
