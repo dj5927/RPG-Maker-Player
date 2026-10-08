@@ -1,4 +1,4 @@
-﻿# RPG Maker Player for Android
+# RPG Maker Player for Android
 
 Android port/source tree for RPG Maker Player.
 
@@ -23,18 +23,7 @@ Any other Android system language falls back to English.
 
 ## Current pre-release candidate
 
-Internal candidate: `A139` / app version `0.13.9-a139`.
-
-Important compatibility work included in this candidate:
-
-- per-game Ruby auto detection and automatic 1.8 / 1.9 / 3.1 fallback
-- successful AUTO runtime persistence per game
-- Ruby search/loading overlay during AUTO fallback
-- Android UTF-8 filesystem handling for modern Ruby 3.1
-- `fontHeightReporting=1` compatibility default
-- direct-storage game execution and persistent save handling
-- EasyRPG / MV / MZ / RGSS gamepad support
-- launcher touch-state and stale process-marker self healing
+RC2 / Android app version `0.14.9-a149`.
 
 ## Source layout
 

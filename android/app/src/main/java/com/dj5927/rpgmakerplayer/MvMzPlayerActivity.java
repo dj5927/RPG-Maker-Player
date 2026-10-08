@@ -230,6 +230,8 @@ public final class MvMzPlayerActivity extends Activity {
                 pathToDocumentId.keySet(), getIntent().getStringExtra(EXTRA_ENGINE));
         compatibilityProfile.pixiTextureSlotRisk = detectPixiTextureSlotRisk();
         compatibilityProfile.nodeCompat = detectNodeCompat();
+        compatibilityProfile.mouseNativeInput = MvMzCompatibility.usesMouseNativeInput(
+                readIndexedText("/js/plugins.js", 512 * 1024));
         GameLog.append(gameLogPath, "PROFILE", compatibilityProfile.json());
     }
 
@@ -378,6 +380,24 @@ public final class MvMzPlayerActivity extends Activity {
         web.getSettings().setSupportZoom(false);
         web.setFocusable(true);
         web.setFocusableInTouchMode(true);
+        web.setOnTouchListener((v, event) -> {
+            if (mouseModeEnabled) {
+                int action = event.getActionMasked();
+                if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
+                    float width = Math.max(1f, v.getWidth());
+                    float height = Math.max(1f, v.getHeight());
+                    hardwareMouseX = clamp01(event.getX() / width);
+                    hardwareMouseY = clamp01(event.getY() / height);
+                    if (gamepadView != null) {
+                        gamepadView.setMouseCursorNormalized(hardwareMouseX, hardwareMouseY);
+                    }
+                    warpMousePosition(hardwareMouseX, hardwareMouseY);
+                }
+            }
+            // Never consume the touch: the MV/MZ WebView must still receive its
+            // original touchstart/touchmove/touchend sequence.
+            return false;
+        });
         web.setWebChromeClient(new WebChromeClient() {
             @Override public boolean onConsoleMessage(ConsoleMessage message) {
                 String level = message == null || message.messageLevel() == null
@@ -555,6 +575,16 @@ public final class MvMzPlayerActivity extends Activity {
     }
 
     @Override public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        if (event.getAction() == MotionEvent.ACTION_SCROLL &&
+                (((event.getSource() & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE) ||
+                        ((event.getSource() & InputDevice.SOURCE_ROTARY_ENCODER) ==
+                                InputDevice.SOURCE_ROTARY_ENCODER))) {
+            float scroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL);
+            if (Math.abs(scroll) > 0.001f) {
+                sendMouseWheel(-scroll * 120f);
+                return true;
+            }
+        }
         if (mouseModeEnabled && event.getAction() == MotionEvent.ACTION_MOVE &&
                 (event.getSource() & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK) {
             float rx = readRightStickAxis(event, MotionEvent.AXIS_RX, MotionEvent.AXIS_Z);
@@ -682,6 +712,23 @@ public final class MvMzPlayerActivity extends Activity {
         webView.evaluateJavascript(script, null);
     }
 
+    private void warpMousePosition(float normalizedX, float normalizedY) {
+        if (webView == null) return;
+        float nx = Math.max(0f, Math.min(1f, normalizedX));
+        float ny = Math.max(0f, Math.min(1f, normalizedY));
+        String script = "(function(){" +
+                "var x=Math.max(0,Math.min(window.innerWidth-1," + nx + "*window.innerWidth));" +
+                "var y=Math.max(0,Math.min(window.innerHeight-1," + ny + "*window.innerHeight));" +
+                "window.__rpgmpMouseX=x;window.__rpgmpMouseY=y;" +
+                "try{if(window.TouchInput&&window.Graphics){" +
+                "var px=x+(window.pageXOffset||0),py=y+(window.pageYOffset||0);" +
+                "TouchInput.mouseX=Graphics.pageToCanvasX(px);" +
+                "TouchInput.mouseY=Graphics.pageToCanvasY(py);" +
+                "}}catch(_e){}" +
+                "})();";
+        webView.evaluateJavascript(script, null);
+    }
+
     private void sendMouseButton(int button, boolean down) {
         if (webView == null) return;
         int safeButton = button == 2 ? 2 : 0;
@@ -708,8 +755,8 @@ public final class MvMzPlayerActivity extends Activity {
                 "var x=(window.__rpgmpMouseX==null?window.innerWidth/2:window.__rpgmpMouseX);" +
                 "var y=(window.__rpgmpMouseY==null?window.innerHeight/2:window.__rpgmpMouseY);" +
                 "var t=document.elementFromPoint(x,y)||document;" +
-                "t.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,clientX:x,clientY:y,deltaY:" +
-                safeDelta + ",deltaMode:0}));" +
+                "t.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true," +
+                "clientX:x,clientY:y,deltaX:0,deltaY:" + safeDelta + ",deltaMode:0}));" +
                 "})();";
         webView.evaluateJavascript(script, null);
     }

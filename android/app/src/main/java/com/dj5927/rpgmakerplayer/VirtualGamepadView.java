@@ -164,19 +164,26 @@ public final class VirtualGamepadView extends View implements InputManager.Input
         float faceR = d * 0.72f;
         float smallR = d * 0.54f;
 
-        float lx = s * 0.17f;
-        float ly = h - s * 0.18f;
+        // Thumb-rest position: lifted and moved inward from the old bottom-left
+        // corner so the left thumb can sit naturally without stretching down.
+        float lx = s * 0.25f;
+        float ly = h - s * 0.27f;
         if (mouseMode && hardwareGamepadPresent) {
             drawMouseCursor(canvas);
             return;
         }
-        float analogCx = mouseMode && mouseTouchOriginValid ? mouseTouchOriginX : lx;
-        float analogCy = mouseMode && mouseTouchOriginValid ? mouseTouchOriginY : ly;
-        drawAnalog(canvas, analogCx, analogCy, d);
+        if (mouseMode) {
+            float analogCx = mouseTouchOriginValid ? mouseTouchOriginX : lx;
+            float analogCy = mouseTouchOriginValid ? mouseTouchOriginY : ly;
+            drawAnalog(canvas, analogCx, analogCy, d);
+        } else {
+            drawDpad(canvas, lx, ly, d);
+        }
 
-        float rx = w - s * 0.19f;
-        float ry = h - s * 0.19f;
-        final float faceGap = 1.15f;
+        // Face buttons stay as a distinct lower-right diamond.
+        float rx = w - s * 0.27f;
+        float ry = h * 0.69f;
+        final float faceGap = 1.45f;
         if (mouseMode) {
             drawButton(canvas, rx, ry + d * faceGap, faceR, "좌클릭");
             drawButton(canvas, rx + d * faceGap, ry, faceR, "우클릭");
@@ -190,11 +197,16 @@ public final class VirtualGamepadView extends View implements InputManager.Input
         drawButton(canvas, rx - d * faceGap, ry, faceR, "X");
         drawButton(canvas, rx + d * faceGap, ry, faceR, "B");
 
-        float shoulderY = Math.max(smallR + 8f, s * 0.085f);
-        drawButton(canvas, w * 0.09f, shoulderY, smallR, "L1");
-        drawButton(canvas, w * 0.19f, shoulderY, smallR, "L2");
-        drawButton(canvas, w * 0.81f, shoulderY, smallR, "R2");
-        drawButton(canvas, w * 0.91f, shoulderY, smallR, "R1");
+        // Shoulder buttons form a compact 2x2 block above ABXY.
+        // Their left/right columns line up with the X/B columns below.
+        float shoulderLeftX = rx - d * faceGap;
+        float shoulderRightX = rx + d * faceGap;
+        float shoulderBottomY = ry - d * 3.00f;
+        float shoulderTopY = ry - d * 4.20f;
+        drawButton(canvas, shoulderLeftX, shoulderTopY, smallR, "L2");
+        drawButton(canvas, shoulderRightX, shoulderTopY, smallR, "R2");
+        drawButton(canvas, shoulderLeftX, shoulderBottomY, smallR, "L1");
+        drawButton(canvas, shoulderRightX, shoulderBottomY, smallR, "R1");
 
         float centerY = h - s * 0.075f;
         drawButton(canvas, w * 0.46f, centerY, smallR * 0.86f, "SELECT");
@@ -238,6 +250,69 @@ public final class VirtualGamepadView extends View implements InputManager.Input
         canvas.drawCircle(cx + dx, cy + dy, knobR * 0.22f, fill);
     }
 
+    private void drawDpad(Canvas canvas, float cx, float cy, float d) {
+        float extent = d * 1.55f;
+        float halfArm = d * 0.56f;
+
+        android.graphics.Path pad = new android.graphics.Path();
+        pad.moveTo(cx - halfArm, cy - extent);
+        pad.lineTo(cx + halfArm, cy - extent);
+        pad.lineTo(cx + halfArm, cy - halfArm);
+        pad.lineTo(cx + extent, cy - halfArm);
+        pad.lineTo(cx + extent, cy + halfArm);
+        pad.lineTo(cx + halfArm, cy + halfArm);
+        pad.lineTo(cx + halfArm, cy + extent);
+        pad.lineTo(cx - halfArm, cy + extent);
+        pad.lineTo(cx - halfArm, cy + halfArm);
+        pad.lineTo(cx - extent, cy + halfArm);
+        pad.lineTo(cx - extent, cy - halfArm);
+        pad.lineTo(cx - halfArm, cy - halfArm);
+        pad.close();
+
+        fill.setStyle(Paint.Style.FILL);
+        fill.setColor(Color.argb(112, 20, 28, 38));
+        canvas.drawPath(pad, fill);
+        fill.setStyle(Paint.Style.STROKE);
+        fill.setStrokeJoin(Paint.Join.ROUND);
+        fill.setStrokeCap(Paint.Cap.ROUND);
+        fill.setStrokeWidth(Math.max(2f, d * 0.055f));
+        fill.setColor(Color.argb(180, 225, 235, 245));
+        canvas.drawPath(pad, fill);
+        fill.setStyle(Paint.Style.FILL);
+
+        float marker = extent * 0.58f;
+        float markerSize = d * 0.36f;
+        drawDpadMarker(canvas, cx, cy - marker, markerSize, 0, analogUp);
+        drawDpadMarker(canvas, cx + marker, cy, markerSize, 1, analogRight);
+        drawDpadMarker(canvas, cx, cy + marker, markerSize, 2, analogDown);
+        drawDpadMarker(canvas, cx - marker, cy, markerSize, 3, analogLeft);
+    }
+
+    private void drawDpadMarker(Canvas canvas, float cx, float cy, float size,
+                                int direction, boolean active) {
+        android.graphics.Path arrow = new android.graphics.Path();
+        if (direction == 0) {
+            arrow.moveTo(cx, cy - size);
+            arrow.lineTo(cx - size * 0.72f, cy + size * 0.55f);
+            arrow.lineTo(cx + size * 0.72f, cy + size * 0.55f);
+        } else if (direction == 1) {
+            arrow.moveTo(cx + size, cy);
+            arrow.lineTo(cx - size * 0.55f, cy - size * 0.72f);
+            arrow.lineTo(cx - size * 0.55f, cy + size * 0.72f);
+        } else if (direction == 2) {
+            arrow.moveTo(cx, cy + size);
+            arrow.lineTo(cx - size * 0.72f, cy - size * 0.55f);
+            arrow.lineTo(cx + size * 0.72f, cy - size * 0.55f);
+        } else {
+            arrow.moveTo(cx - size, cy);
+            arrow.lineTo(cx + size * 0.55f, cy - size * 0.72f);
+            arrow.lineTo(cx + size * 0.55f, cy + size * 0.72f);
+        }
+        arrow.close();
+        fill.setColor(active ? Color.argb(245, 255, 255, 255)
+                : Color.argb(145, 220, 232, 244));
+        canvas.drawPath(arrow, fill);
+    }
     private void drawButton(Canvas canvas, float x, float y, float r, String label) {
         fill.setColor(Color.argb(96, 20, 27, 36));
         canvas.drawCircle(x, y, r, fill);
@@ -310,7 +385,7 @@ public final class VirtualGamepadView extends View implements InputManager.Input
             int index = event.getActionIndex();
             int pointerId = event.getPointerId(index);
             float x = event.getX(index), y = event.getY(index);
-            if (analogPointerId < 0 && insideAnalogZone(x, y)) {
+            if (analogPointerId < 0 && canStartAnalogGesture(x, y)) {
                 analogPointerId = pointerId;
                 if (mouseMode) {
                     mouseTouchOriginX = x;
@@ -339,7 +414,7 @@ public final class VirtualGamepadView extends View implements InputManager.Input
             int index = event.getActionIndex();
             int pointerId = event.getPointerId(index);
             float x = event.getX(index), y = event.getY(index);
-            if (analogPointerId < 0 && insideAnalogZone(x, y)) {
+            if (analogPointerId < 0 && canStartAnalogGesture(x, y)) {
                 analogPointerId = pointerId;
                 if (mouseMode) {
                     mouseTouchOriginX = x;
@@ -394,16 +469,29 @@ public final class VirtualGamepadView extends View implements InputManager.Input
     private boolean insideAnalogZone(float x, float y) {
         float s = Math.min(getWidth(), getHeight());
         float d = s * (largeMode ? 0.10f : 0.085f);
-        float lx = s * 0.17f;
-        float ly = getHeight() - s * 0.18f;
+        float lx = s * 0.25f;
+        float ly = getHeight() - s * 0.27f;
         return inside(x, y, lx, ly, d * 1.75f);
+    }
+
+    private boolean insideDpadTouchZone(float x, float y) {
+        float s = Math.min(getWidth(), getHeight());
+        float d = s * (largeMode ? 0.10f : 0.085f);
+        float lx = s * 0.25f;
+        float ly = getHeight() - s * 0.27f;
+        float extent = d * 1.62f;
+        return Math.abs(x - lx) <= extent && Math.abs(y - ly) <= extent;
+    }
+
+    private boolean canStartAnalogGesture(float x, float y) {
+        return mouseMode ? insideAnalogZone(x, y) : insideDpadTouchZone(x, y);
     }
 
     private void updateAnalog(float x, float y) {
         float s = Math.min(getWidth(), getHeight());
         float d = s * (largeMode ? 0.10f : 0.085f);
-        float cx = mouseMode && mouseTouchOriginValid ? mouseTouchOriginX : s * 0.17f;
-        float cy = mouseMode && mouseTouchOriginValid ? mouseTouchOriginY : getHeight() - s * 0.18f;
+        float cx = mouseMode && mouseTouchOriginValid ? mouseTouchOriginX : s * 0.25f;
+        float cy = mouseMode && mouseTouchOriginValid ? mouseTouchOriginY : getHeight() - s * 0.27f;
         float baseR = d * 1.42f;
         float dx = x - cx;
         float dy = y - cy;
@@ -420,15 +508,28 @@ public final class VirtualGamepadView extends View implements InputManager.Input
             invalidate();
             return;
         }
+        updateDpadDirections(dx, dy, d);
+    }
+
+    private void updateDpadDirections(float dx, float dy, float d) {
         boolean up = false, down = false, left = false, right = false;
-        if (mag >= dead) {
-            float nx = dx / mag;
-            float ny = dy / mag;
-            final float axisThreshold = 0.38f;
-            left = nx <= -axisThreshold;
-            right = nx >= axisThreshold;
-            up = ny <= -axisThreshold;
-            down = ny >= axisThreshold;
+        float absX = Math.abs(dx);
+        float absY = Math.abs(dy);
+        float dead = d * 0.34f;
+        if (Math.max(absX, absY) >= dead) {
+            final float dominantRatio = 1.35f;
+            if (absX > absY * dominantRatio) {
+                left = dx < 0f;
+                right = dx > 0f;
+            } else if (absY > absX * dominantRatio) {
+                up = dy < 0f;
+                down = dy > 0f;
+            } else {
+                left = dx < 0f;
+                right = dx > 0f;
+                up = dy < 0f;
+                down = dy > 0f;
+            }
         }
 
         setAnalogDirection(KeyEvent.KEYCODE_DPAD_UP, up, analogUp);
@@ -513,19 +614,22 @@ public final class VirtualGamepadView extends View implements InputManager.Input
         float r = d * 0.84f;
         float smallR = d * 0.68f;
 
-        float rx = w - s * 0.19f;
-        float ry = h - s * 0.19f;
-        final float faceGap = 1.15f;
+        float rx = w - s * 0.27f;
+        float ry = h * 0.69f;
+        final float faceGap = 1.45f;
         if (inside(x, y, rx, ry + d * faceGap, r)) return KeyEvent.KEYCODE_BUTTON_A;
         if (inside(x, y, rx + d * faceGap, ry, r)) return KeyEvent.KEYCODE_BUTTON_B;
         if (inside(x, y, rx - d * faceGap, ry, r)) return KeyEvent.KEYCODE_BUTTON_X;
         if (inside(x, y, rx, ry - d * faceGap, r)) return KeyEvent.KEYCODE_BUTTON_Y;
 
-        float shoulderY = Math.max(smallR + 8f, s * 0.085f);
-        if (inside(x, y, w * 0.09f, shoulderY, smallR)) return KeyEvent.KEYCODE_BUTTON_L1;
-        if (inside(x, y, w * 0.19f, shoulderY, smallR)) return KeyEvent.KEYCODE_BUTTON_L2;
-        if (inside(x, y, w * 0.81f, shoulderY, smallR)) return KeyEvent.KEYCODE_BUTTON_R2;
-        if (inside(x, y, w * 0.91f, shoulderY, smallR)) return KeyEvent.KEYCODE_BUTTON_R1;
+        float shoulderLeftX = rx - d * faceGap;
+        float shoulderRightX = rx + d * faceGap;
+        float shoulderBottomY = ry - d * 3.00f;
+        float shoulderTopY = ry - d * 4.20f;
+        if (inside(x, y, shoulderLeftX, shoulderTopY, smallR)) return KeyEvent.KEYCODE_BUTTON_L2;
+        if (inside(x, y, shoulderRightX, shoulderTopY, smallR)) return KeyEvent.KEYCODE_BUTTON_R2;
+        if (inside(x, y, shoulderLeftX, shoulderBottomY, smallR)) return KeyEvent.KEYCODE_BUTTON_L1;
+        if (inside(x, y, shoulderRightX, shoulderBottomY, smallR)) return KeyEvent.KEYCODE_BUTTON_R1;
 
         float centerY = h - s * 0.075f;
         if (inside(x, y, w * 0.46f, centerY, smallR)) return KeyEvent.KEYCODE_BUTTON_SELECT;
@@ -538,9 +642,9 @@ public final class VirtualGamepadView extends View implements InputManager.Input
         float s = Math.min(w, h);
         float d = s * (largeMode ? 0.10f : 0.085f);
         float r = d * 0.84f;
-        float rx = w - s * 0.19f;
-        float ry = h - s * 0.19f;
-        final float faceGap = 1.15f;
+        float rx = w - s * 0.27f;
+        float ry = h * 0.69f;
+        final float faceGap = 1.45f;
         if (inside(x, y, rx, ry + d * faceGap, r)) return KeyEvent.KEYCODE_BUTTON_A;
         if (inside(x, y, rx + d * faceGap, ry, r)) return KeyEvent.KEYCODE_BUTTON_B;
         if (inside(x, y, rx - d * faceGap, ry, r)) return KeyEvent.KEYCODE_BUTTON_X;

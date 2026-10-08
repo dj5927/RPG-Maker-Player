@@ -114,8 +114,8 @@ $gradleSource = Get-Content $gradle -Raw
 if ($gradleSource -match 'abiFilters') {
     throw 'Global ABI filter must not restrict launcher APK'
 }
-if ($gradleSource -notmatch 'versionCode 139') {
-    throw 'A139 versionCode missing'
+if ($gradleSource -notmatch 'versionCode 149') {
+    throw 'A149 versionCode missing'
 }
 $modernDebugWriter = Get-Content (Join-Path $root 'work\mkxp-z-android-modern\app\jni\mkxp-z\src\util\debugwriter.h') -Raw
 foreach ($needle in @('RPGMP_GAME_LOG','[MKXP-MODERN]','std::fopen')) {

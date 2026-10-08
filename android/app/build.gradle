@@ -10,8 +10,8 @@ android {
         applicationId 'com.dj5927.rpgmakerplayer'
         minSdk 26
         targetSdk 36
-        versionCode 139
-        versionName '0.13.9-a139'
+        versionCode 149
+        versionName '0.14.9-a149'
         externalNativeBuild {
             cmake {
                 cppFlags '-std=c++17'

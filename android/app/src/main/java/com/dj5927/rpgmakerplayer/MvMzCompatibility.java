@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 public final class MvMzCompatibility {
     public static final class Profile {
@@ -23,6 +24,7 @@ public final class MvMzCompatibility {
         public boolean nonAsciiPath;
         public boolean nodeCompat;
         public boolean pixiTextureSlotRisk;
+        public boolean mouseNativeInput;
 
         Profile(String engine) {
             this.engine = engine == null ? "UNKNOWN" : engine;
@@ -44,7 +46,8 @@ public final class MvMzCompatibility {
                     "plusPath:" + plusPath + "," +
                     "nonAsciiPath:" + nonAsciiPath + "," +
                     "nodeCompat:" + nodeCompat + "," +
-                    "pixiTextureSlotRisk:" + pixiTextureSlotRisk +
+                    "pixiTextureSlotRisk:" + pixiTextureSlotRisk + "," +
+                    "mouseNativeInput:" + mouseNativeInput +
                     "}";
         }
     }
@@ -94,10 +97,12 @@ public final class MvMzCompatibility {
 
         String nodeBootstrap = profile.nodeCompat ?
                 "<script id=\"rpgmp-node-compat\" src=\"/__rpgmp_node_compat.js\"></script>" : "";
+        String mouseBootstrap = profile.mouseNativeInput ? buildMouseTouchBootstrap() : "";
         String bootstrap = fontStyle + nodeBootstrap + "<script id=\"rpgmp-android-compat\">" +
                 "window.__RPGMP_ANDROID__=" + profile.json() + ";" +
                 "window.__RPGMP_ANDROID__.webview=true;" +
                 "document.addEventListener('contextmenu',function(e){e.preventDefault();},{passive:false});" +
+                mouseBootstrap +
                 (profile.oggAudioAvailable && !profile.m4aAudioAvailable ?
                         "(function(){var p=HTMLMediaElement&&HTMLMediaElement.prototype;if(p&&p.canPlayType&&!p.__rpgmpCanPlay){var old=p.canPlayType;p.canPlayType=function(t){if(t&&String(t).toLowerCase().indexOf('audio/ogg')>=0)return 'probably';return old.call(this,t);};p.__rpgmpCanPlay=true;}})();" : "") +
                 "window.__rpgmpResumeAudio=function(){try{if(window.WebAudio&&WebAudio._context&&WebAudio._context.state==='suspended'){WebAudio._context.resume();}}catch(_a){}" +
@@ -136,6 +141,37 @@ public final class MvMzCompatibility {
             else html += lateBootstrap;
         }
         return new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8));
+    }
+
+    static boolean usesMouseNativeInput(String pluginsJs) {
+        if (pluginsJs == null || pluginsJs.isEmpty()) return false;
+        return enabledPlugin(pluginsJs, "Mousu_base") ||
+                enabledPlugin(pluginsJs, "MousePointerExtend") ||
+                enabledPlugin(pluginsJs, "MPP_SimpleTouch3") ||
+                enabledPlugin(pluginsJs, "FTKR_InterlockMouseAndWindow");
+    }
+
+    private static boolean enabledPlugin(String pluginsJs, String name) {
+        Pattern pattern = Pattern.compile(
+                "\\{\\s*\\\"name\\\"\\s*:\\s*\\\"" + Pattern.quote(name) +
+                        "\\\"\\s*,\\s*\\\"status\\\"\\s*:\\s*true",
+                Pattern.CASE_INSENSITIVE);
+        return pattern.matcher(pluginsJs).find();
+    }
+
+    private static String buildMouseTouchBootstrap() {
+        return "(function(){if(window.__rpgmpTouchMouseSync)return;" +
+                "window.__rpgmpTouchMouseSync=true;" +
+                "function s(e){try{var a=e.changedTouches;if(!a||!a.length)return;var p=a[0];" +
+                "if(!window.TouchInput||!window.Graphics)return;" +
+                "var px=(p.pageX==null?p.clientX+(window.pageXOffset||0):p.pageX);" +
+                "var py=(p.pageY==null?p.clientY+(window.pageYOffset||0):p.pageY);" +
+                "TouchInput.mouseX=Graphics.pageToCanvasX(px);" +
+                "TouchInput.mouseY=Graphics.pageToCanvasY(py);" +
+                "}catch(_m){}}" +
+                "document.addEventListener('touchstart',s,true);" +
+                "document.addEventListener('touchmove',s,true);" +
+                "})();";
     }
 
     public static InputStream rewritePixiJs(InputStream input, Profile profile) throws Exception {
@@ -187,6 +223,9 @@ public final class MvMzCompatibility {
         StringBuilder js = new StringBuilder();
         js.append("<script id=\"rpgmp-android-late\">");
         js.append(buildPersistentSaveBootstrap(profile));
+        if (profile != null && "MV".equalsIgnoreCase(profile.engine)) {
+            js.append(buildMvLegacyUiBootstrap());
+        }
         if (profile.oggAudioAvailable && !profile.m4aAudioAvailable) {
             js.append("try{if(window.AudioManager&&AudioManager.audioFileExt){AudioManager.audioFileExt=function(){return '.ogg';};AudioManager.__rpgmpAudioExt=true;}}catch(_ext){};");
         }
@@ -206,6 +245,30 @@ public final class MvMzCompatibility {
                 + "if(c&&c.state==='suspended'){var args=Array.prototype.slice.call(arguments);if(multi){q[slot].push(args);if(q[slot].length>16)q[slot].shift();}else q[slot]=args;return;}return old.apply(this,arguments);};});"
                 + "AudioManager.__rpgmpGuard=true;}catch(_g){}})();");
         js.append("</script>");
+        return js.toString();
+    }
+
+    private static String buildMvLegacyUiBootstrap() {
+        StringBuilder js = new StringBuilder();
+        js.append("(function(){try{");
+        js.append("if(window.Bitmap&&Bitmap.prototype&&!Bitmap.prototype.__rpgmpDrawTextAlign){");
+        js.append("var od=Bitmap.prototype.drawText;Bitmap.prototype.drawText=function(t,x,y,mw,lh,a){");
+        js.append("if(a!=='left'&&a!=='center'&&a!=='right'&&a!=='start'&&a!=='end')a='left';");
+        js.append("return od.call(this,t,x,y,mw,lh,a);};Bitmap.prototype.__rpgmpDrawTextAlign=true;");
+        js.append("console.log('[RPGMP MVUI] drawText align compatibility active');}");
+        js.append("window.__rpgmpRepairSkillHolder=function(reason){try{");
+        js.append("if(!window.$dataSystem||!$dataSystem.variables||$dataSystem.variables[44]!=='☆現在のスキルホルダー'||!window.$gameVariables)return false;");
+        js.append("var raw=$gameVariables.value(44),n=Number(raw);");
+        js.append("if(!isFinite(n)||Math.floor(n)!==n||n<0||n>5){$gameVariables.setValue(44,0);");
+        js.append("console.warn('[RPGMP MAPSKILL] repaired holder old='+raw+' -> 0 reason='+reason);return true;}");
+        js.append("}catch(e){console.warn('[RPGMP MAPSKILL] repair failed',e);}return false;};");
+        js.append("if(window.Game_Interpreter&&Game_Interpreter.prototype&&!Game_Interpreter.prototype.__rpgmpSkillHolderRepair){");
+        js.append("var c117=Game_Interpreter.prototype.command117;Game_Interpreter.prototype.command117=function(){");
+        js.append("var id=this._params&&this._params[0];if(id===119||id===122){");
+        js.append("window.__rpgmpRepairSkillHolder('common='+id);");
+        js.append("}");
+        js.append("return c117.apply(this,arguments);};Game_Interpreter.prototype.__rpgmpSkillHolderRepair=true;}");
+        js.append("}catch(e){console.error('[RPGMP MVUI] compatibility install failed',e);}})();");
         return js.toString();
     }
 

@@ -25,6 +25,14 @@ public final class MvMzCompatibilitySmoke {
         if (!profile.oggAudioAvailable || profile.m4aAudioAvailable) {
             throw new AssertionError("OGG-only audio availability detection failed");
         }
+        String mousePlugins = "var $plugins=[{\"name\":\"Mousu_base\",\"status\":true}," +
+                "{\"name\":\"MouseWheelExtend\",\"status\":true}];";
+        if (!MvMzCompatibility.usesMouseNativeInput(mousePlugins) ||
+                MvMzCompatibility.usesMouseNativeInput(
+                        "var $plugins=[{\"name\":\"Mousu_base\",\"status\":false}];")) {
+            throw new AssertionError("mouse-native plugin detection failed");
+        }
+        profile.mouseNativeInput = true;
         String html = "<html><head><script src=\"js/rpg_core.js\"></script>" +
                 "<script src=\"js/rpg_managers.js\"></script>" +
                 "<script src=\"js/main.js\"></script></head><body></body></html>";
@@ -39,6 +47,24 @@ public final class MvMzCompatibilitySmoke {
         }
         if (!result.contains("khas:true") || !result.contains("yep:true")) {
             throw new AssertionError("compat profile was not serialized into bootstrap");
+        }
+        if (!result.contains("mouseNativeInput:true") ||
+                !result.contains("__rpgmpTouchMouseSync") ||
+                !result.contains("TouchInput.mouseX=Graphics.pageToCanvasX") ||
+                result.contains("new MouseEvent('mousemove'")) {
+            throw new AssertionError("mouse-native touch coordinate bridge missing");
+        }
+        if (!result.contains("[RPGMP MVUI] drawText align compatibility active") ||
+                !result.contains("[RPGMP MAPSKILL] repaired holder old=") ||
+                !result.contains("☆現在のスキルホルダー") ||
+                !result.contains("__rpgmpRepairSkillHolder") ||
+                !result.contains("Bitmap.prototype.drawText=function")) {
+            throw new AssertionError("MV legacy UI compatibility/targeted repair missing");
+        }
+        if (result.contains("[RPGMP MAPSKILL] show id=") ||
+                result.contains("[RPGMP MAPSKILL] learn actor=") ||
+                result.contains("__rpgmpMapSkillDiag")) {
+            throw new AssertionError("temporary A143 MAP skill diagnostics must be removed");
         }
         if (result.contains("rpgmp-korean-font")) {
             throw new AssertionError("bundled game font must not be overridden by fallback font");
