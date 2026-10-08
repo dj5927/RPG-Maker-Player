@@ -1,0 +1,17 @@
+.gradle/
+build/
+**/build/
+**/obj/
+**/.cxx/
+local.properties
+.tooling/
+android-sdk/
+DIST/
+*.apk
+*.aab
+*.so
+*.a
+*.o
+*.log
+*.keystore
+*.jks

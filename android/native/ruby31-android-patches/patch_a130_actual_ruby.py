@@ -1,0 +1,11 @@
+﻿from pathlib import Path
+p=Path('/opt/rpgmp-mkxpz-build/app/jni/ruby/localeinit.c')
+s=p.read_text()
+s=s.replace('#if NO_LOCALE_CHARMAP\n    return rb_usascii_str_new_cstr("US-ASCII");', '#if defined __ANDROID__\n    return rb_usascii_str_new_cstr("UTF-8");\n#elif NO_LOCALE_CHARMAP\n    return rb_usascii_str_new_cstr("US-ASCII");', 1)
+s=s.replace('#if NO_LOCALE_CHARMAP\n    return ENCINDEX_US_ASCII;', '#if defined __ANDROID__\n    return ENCINDEX_UTF_8;\n#elif NO_LOCALE_CHARMAP\n    return ENCINDEX_US_ASCII;', 1)
+s=s.replace('#if NO_LOCALE_CHARMAP\n    idx = ENCINDEX_US_ASCII;', '#if defined __ANDROID__\n    idx = ENCINDEX_UTF_8;\n#elif NO_LOCALE_CHARMAP\n    idx = ENCINDEX_US_ASCII;', 1)
+p.write_text(s)
+pt=Path('/opt/rpgmp-mkxpz-build/app/jni/ruby/transcode.c')
+st=pt.read_text().replace('const VALUE fn = rb_usascii_str_new(0, total_len);','const VALUE fn = rb_str_new(0, total_len);')
+pt.write_text(st)
+print('PATCHED_ACTUAL_RUBY')

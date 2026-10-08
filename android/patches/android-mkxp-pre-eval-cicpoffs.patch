@@ -1,0 +1,27 @@
+﻿diff --git a/binding-mri/binding-mri.cpp b/binding-mri/binding-mri.cpp
+index 4b98652..fb9446e 100644
+--- a/binding-mri/binding-mri.cpp
++++ b/binding-mri/binding-mri.cpp
+@@ -880,6 +880,22 @@ static void runRMXPScripts(BacktraceData &btData)
+         }
+     }
+ 
++    // RPG Maker Player Android compatibility hook.
++    // At this point $RGSS_SCRIPTS exists and every section is decoded, but no
++    // game script has executed yet. This is the only safe point for the
++    // signature-driven cicpoffs/Kawariki script rewrites used by the desktop
++    // launcher as well.
++    const std::string rpgmpCompatScript = "compat/common/cicpoffs_compat.rb";
++    if (shState->fileSystem().exists(rpgmpCompatScript.c_str()))
++    {
++        Debug()<<"RPGMP_ANDROID_CICPOFFS_PRE_EVAL";
++        runCustomScript(rpgmpCompatScript);
++
++        VALUE compatExc = rb_gv_get("$!");
++        if (compatExc != Qnil)
++            return;
++    }
++
+ 	while (true)
+ 	{
+ 		for (long i = 0; i < scriptCount; ++i)
