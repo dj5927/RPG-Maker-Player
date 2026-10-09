@@ -182,6 +182,20 @@
     }
   };
   fsModule.readFile = function (p, o, cb) { if (typeof o === 'function') { cb = o; o = undefined; } try { var v = fsModule.readFileSync(p, o); setTimeout(function () { cb && cb(null, v); }, 0); } catch (e) { setTimeout(function () { cb && cb(e); }, 0); } };
+  fsModule.readdir = function (p, options, cb) {
+    if (typeof options === 'function') { cb = options; options = undefined; }
+    if (typeof cb !== 'function') throw new TypeError('fs.readdir callback must be a function');
+    var result, error = null;
+    try {
+      if (!fsModule.statSync(p).isDirectory()) {
+        error = new Error("ENOTDIR: scandir '" + p + "'");
+        error.code = 'ENOTDIR';
+      } else {
+        result = fsModule.readdirSync(p);
+      }
+    } catch (e) { error = e; }
+    setTimeout(function () { cb(error, error ? undefined : result); }, 0);
+  };
   fsModule.writeFile = function (p, d, o, cb) { if (typeof o === 'function') { cb = o; o = undefined; } try { fsModule.writeFileSync(p, d, o); setTimeout(function () { cb && cb(null); }, 0); } catch (e) { setTimeout(function () { cb && cb(e); }, 0); } };
   fsModule.mkdir = function (p, o, cb) { if (typeof o === 'function') cb = o; try { fsModule.mkdirSync(p); setTimeout(function () { cb && cb(null); }, 0); } catch (e) { setTimeout(function () { cb && cb(e); }, 0); } };
   fsModule.unlink = function (p, cb) { try { fsModule.unlinkSync(p); setTimeout(function () { cb && cb(null); }, 0); } catch (e) { setTimeout(function () { cb && cb(e); }, 0); } };

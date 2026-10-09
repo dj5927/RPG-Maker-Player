@@ -37,6 +37,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -44,6 +45,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public final class MvMzPlayerActivity extends Activity {
     public static final String EXTRA_TREE_URI = "treeUri";
@@ -61,6 +64,36 @@ public final class MvMzPlayerActivity extends Activity {
     private static final String HOST = "rpgmaker.local";
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ScheduledExecutorService webConsoleLogWriter =
+            Executors.newSingleThreadScheduledExecutor();
+    private final ArrayList<GameLog.LogEntry> pendingConsoleLog = new ArrayList<>();
+    private boolean consoleFlushScheduled;
+    private void enqueueWebConsoleLog(String level, String message) {
+        if (webConsoleLogWriter.isShutdown()) return;
+        synchronized (pendingConsoleLog) {
+            pendingConsoleLog.add(new GameLog.LogEntry(
+                    System.currentTimeMillis(), "JS/" + level, message));
+            if (!consoleFlushScheduled) {
+                consoleFlushScheduled = true;
+                webConsoleLogWriter.schedule(this::flushWebConsoleLog, 75, TimeUnit.MILLISECONDS);
+            }
+        }
+    }
+
+    private void flushWebConsoleLog() {
+        ArrayList<GameLog.LogEntry> batch;
+        synchronized (pendingConsoleLog) {
+            if (pendingConsoleLog.isEmpty()) {
+                consoleFlushScheduled = false;
+                return;
+            }
+            batch = new ArrayList<>(pendingConsoleLog);
+            pendingConsoleLog.clear();
+            consoleFlushScheduled = false;
+        }
+        GameLog.appendBatch(gameLogPath, batch);
+    }
+
     private final Map<String, String> pathToDocumentId = new HashMap<>();
     private final Map<String, String> pathToDocumentIdLower = new HashMap<>();
     private final Map<String, String> pathToDocumentIdCompat = new HashMap<>();
@@ -316,6 +349,15 @@ public final class MvMzPlayerActivity extends Activity {
     private void installRenderDiagnostics(WebView view) {
         String script = "(function install(){try{" +
                 "if(window.__rpgmpRenderDiag)return;" +
+                "(function screenProbe(){try{var c=document.querySelector('#gameCanvas')||document.querySelector('canvas');" +
+                "if(!c){setTimeout(screenProbe,600);return;}" +
+                "var r=c.getBoundingClientRect();" +
+                "console.log('[RPGMP-SCREEN] viewport='+innerWidth+'x'+innerHeight+" +
+                "' canvasBacking='+c.width+'x'+c.height+' css='+Math.round(r.width)+'x'+Math.round(r.height)+" +
+                "' left='+Math.round(r.left)+' top='+Math.round(r.top)+" +
+                "' graphics='+((window.Graphics&&Graphics.width)||'?')+'x'+((window.Graphics&&Graphics.height)||'?')+" +
+                "' scale='+((window.Graphics&&Graphics._realScale)||'?'));}" +
+                "catch(e){console.log('[RPGMP-SCREEN] '+e);}})();" +
                 "if(!window.Scene_Base||!window.Game_Screen||!window.SceneManager){setTimeout(install,250);return;}" +
                 "var log=function(s){try{console.log('[RPGMP-DIAG] '+s);}catch(_e){}};" +
                 "var sfi=Scene_Base.prototype.startFadeIn,sfo=Scene_Base.prototype.startFadeOut;" +
@@ -366,6 +408,56 @@ public final class MvMzPlayerActivity extends Activity {
         view.evaluateJavascript(script, null);
     }
 
+    private void installGameScreenFit(WebView view) {
+        String js = "(function fit(){try{" +
+                "var g=window.Graphics;" +
+                "if(!g||!g._canvas||!g._width||!g._height){setTimeout(fit,350);return;}" +
+                "if(g.__rpgmpAutoFitInstalled)return;" +
+                "g.__rpgmpAutoFitInstalled=true;" +
+                "var apply=function(){try{" +
+                "if(g.__rpgmpApplyingFit)return;" +
+                "var w=document.documentElement.clientWidth||innerWidth,h=document.documentElement.clientHeight||innerHeight;" +
+                "var s=Math.min(w/g._width,h/g._height);" +
+                "if(!isFinite(s)||s<=0)return;" +
+                "var before=g._realScale;" +
+                "if(g._canvas){g._canvas.style.imageRendering='pixelated';}" +
+                "if(Math.abs(before-s)<0.02)return;" +
+                "g.__rpgmpApplyingFit=true;" +
+                "g._realScale=s;" +
+                "if(typeof g._updateAllElements==='function')g._updateAllElements();" +
+                "console.log('[RPGMP-FIT] viewport='+w+'x'+h+' game='+g._width+'x'+g._height+' old='+before+' new='+s);" +
+                "}catch(e){console.log('[RPGMP-FIT] error='+e);}finally{g.__rpgmpApplyingFit=false;}};" +
+                "var old=g._updateRealScale;" +
+                "if(typeof old==='function')g._updateRealScale=function(){if(g.__rpgmpApplyingFit)return;old.apply(this,arguments);apply();};" +
+                "window.addEventListener('resize',apply);" +
+                "apply();setInterval(apply,1300);" +
+                "}catch(e){console.log('[RPGMP-FIT] initialization error='+e);}})();";
+        view.evaluateJavascript(js, null);
+    }
+
+    private void installTransitionPerformanceProbe(WebView view) {
+        String js = "(function probe(){try{" +
+                "if(!window.SceneManager||!window.Scene_Map){setTimeout(probe,350);return;}" +
+                "if(SceneManager.__rpgmpTransitionProbe)return;" +
+                "SceneManager.__rpgmpTransitionProbe=true;" +
+                "var now=function(){return performance.now();};" +
+                "var log=function(n,dt){if(dt>=8)console.log('[RPGMP-PERF] '+n+' ms='+dt.toFixed(1));};" +
+                "var sm=SceneManager;" +
+                "['snap','changeScene','updateScene'].forEach(function(n){" +
+                "var old=sm[n];if(typeof old!=='function')return;" +
+                "sm[n]=function(){var t=now();try{return old.apply(this,arguments);}finally{log('SceneManager.'+n,now()-t);}};});" +
+                "var p=Scene_Map.prototype;" +
+                "['create','start','onMapLoaded'].forEach(function(n){" +
+                "var old=p[n];if(typeof old!=='function')return;" +
+                "p[n]=function(){var t=now();try{return old.apply(this,arguments);}finally{log('Scene_Map.'+n,now()-t);}};});" +
+                "var last=now(),longFrames=0;" +
+                "function tick(t){var dt=t-last;last=t;if(dt>90&&longFrames++<30)log('frame_gap',dt);requestAnimationFrame(tick);}" +
+                "requestAnimationFrame(tick);" +
+                "console.log('[RPGMP-PERF] transition probe active');" +
+                "}catch(e){console.warn('[RPGMP-PERF] '+e);}})();";
+        view.evaluateJavascript(js, null);
+    }
+
     private void startWebView() {
         WebView web = new WebView(this);
         webView = web;
@@ -404,7 +496,7 @@ public final class MvMzPlayerActivity extends Activity {
                         ? "LOG" : message.messageLevel().name();
                 String text = message == null ? "" :
                         message.message() + " @" + message.sourceId() + ":" + message.lineNumber();
-                GameLog.append(gameLogPath, "JS/" + level, text);
+                enqueueWebConsoleLog(level, text);
                 return true;
             }
         });
@@ -459,7 +551,11 @@ public final class MvMzPlayerActivity extends Activity {
             @Override public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 GameLog.append(gameLogPath, "WEBVIEW", "pageFinished " + url);
-                installRenderDiagnostics(view);
+                if (getIntent().getBooleanExtra("mvmzDiagnostics", false)) {
+                    installRenderDiagnostics(view);
+                    installTransitionPerformanceProbe(view);
+                }
+                installGameScreenFit(view);
             }
 
             @Override public boolean onRenderProcessGone(WebView view,
@@ -864,6 +960,8 @@ public final class MvMzPlayerActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        flushWebConsoleLog();
+        webConsoleLogWriter.shutdown();
         worker.shutdownNow();
         WebView web = webView;
         webView = null;
