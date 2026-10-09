@@ -23,7 +23,11 @@ Any other Android system language falls back to English.
 
 ## Current pre-release candidate
 
-RC4 / Android app version `0.15.7-a157`.
+RC5 / Android app version `0.16.4-a164`.
+
+Selected libraries automatically create an empty _compat/patches.json file
+without overwriting user patches. Static MV/MZ NW.js file lookups reuse the
+complete resource index regardless of JSON/CSV/RCSV; saves use live storage.
 
 ## Source layout
 

@@ -3,6 +3,7 @@
 #include "game_view.hpp"
 #include "launcher_config.hpp"
 #include "ruby_detector.hpp"
+#include "steam_mouse_bridge.hpp"
 #include "ui_sound.hpp"
 
 #include <SDL.h>
@@ -688,6 +689,39 @@ enum class GameLocale {
 
 fs::path gameLocaleFile(const GameInfo& game) {
   return game.path / "mkxp-locale.txt";
+}
+
+fs::path mouseModeFile(const GameInfo& game) {
+  return game.path / "mkxp-mouse-mode.txt";
+}
+
+bool mouseModeEnabled(const GameInfo& game) {
+  std::ifstream in(mouseModeFile(game), std::ios::binary);
+  if (!in) return false;
+  std::string value;
+  std::getline(in, value);
+  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) value.pop_back();
+  std::size_t first = 0;
+  while (first < value.size() && std::isspace(static_cast<unsigned char>(value[first]))) ++first;
+  value.erase(0, first);
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return value == "1" || value == "on" || value == "true" || value == "enabled";
+}
+
+bool saveMouseMode(const GameInfo& game, bool enabled) {
+  std::ofstream out(mouseModeFile(game), std::ios::binary | std::ios::trunc);
+  if (!out) return false;
+  out << (enabled ? "on" : "off") << '\n';
+  return static_cast<bool>(out);
+}
+
+std::string mouseModeLabel(const GameInfo& game) {
+  const bool enabled = mouseModeEnabled(game);
+  if (gUiLanguage == UiLanguage::Korean) return enabled ? "켬" : "끔";
+  if (gUiLanguage == UiLanguage::Japanese) return enabled ? "オン" : "オフ";
+  return enabled ? "On" : "Off";
 }
 
 std::string gameLocaleCode(GameLocale locale) {
@@ -1587,7 +1621,8 @@ void drawFrontendStandby(SDL_Renderer* renderer) {
 int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
                      const FontSet& fonts, SDL_GameController* controller,
                      const fs::path& exitRequestFile,
-                     bool allowSteamKeyboardShortcut = false) {
+                     bool allowSteamKeyboardShortcut = false,
+                     bool controllerMouseMode = false) {
   (void)window;
   (void)renderer;
   (void)fonts;
@@ -1617,6 +1652,24 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
       exitLog.flush();
     }
   };
+
+  SDL_DisplayMode mouseDisplayMode{};
+  int mouseDisplayWidth = 1280;
+  int mouseDisplayHeight = 800;
+  if (SDL_GetCurrentDisplayMode(0, &mouseDisplayMode) == 0 &&
+      mouseDisplayMode.w > 0 && mouseDisplayMode.h > 0) {
+    mouseDisplayWidth = mouseDisplayMode.w;
+    mouseDisplayHeight = mouseDisplayMode.h;
+  }
+  rpgmp::SteamMouseBridge mouseBridge(controllerMouseMode);
+  std::string mouseBridgeDiagnostic;
+  const bool mouseBridgeReady =
+      mouseBridge.initialize(mouseDisplayWidth, mouseDisplayHeight, mouseBridgeDiagnostic);
+  logExit(std::string("mouse bridge | ready=") + (mouseBridgeReady ? "1" : "0") +
+          " controllerMode=" + (controllerMouseMode ? "1" : "0") +
+          " display=" + std::to_string(mouseDisplayWidth) + "x" +
+          std::to_string(mouseDisplayHeight) +
+          " diagnostic=" + mouseBridgeDiagnostic);
 
   auto activeController = [&]() -> SDL_GameController* {
     if (controller && SDL_GameControllerGetAttached(controller)) return controller;
@@ -1737,12 +1790,18 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
 
     bool comboPressed = false;
     bool keyboardComboPressed = false;
-    if (SDL_GameController* pad = activeController()) {
+    SDL_GameController* pad = activeController();
+    if (pad) {
       const bool startPressed = SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_START) != 0;
       const bool selectPressed = SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_BACK) != 0;
       const bool xPressed = SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_X) != 0;
       comboPressed = startPressed && selectPressed;
       keyboardComboPressed = selectPressed && xPressed && !startPressed;
+    }
+    mouseBridge.updateController(pad, SDL_GetTicks64());
+    std::string touchSource;
+    if (mouseBridge.pollTwoFingerTouch(touchSource)) {
+      logExit("mouse bridge | two-finger right-click source=" + touchSource);
     }
     const EvdevGameButtons evdevButtons = readEvdevButtons();
     comboPressed = comboPressed || evdevButtons.exitCombo;
@@ -1788,6 +1847,10 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
 
     SDL_Event event{};
     while (SDL_PollEvent(&event)) {
+      std::string sdlTouchSource;
+      if (mouseBridge.handleSdlTouchEvent(event, sdlTouchSource)) {
+        logExit("mouse bridge | two-finger right-click source=" + sdlTouchSource);
+      }
       if (event.type == SDL_QUIT && terminateRequestedAt == 0) {
         kill(-pid, SIGTERM);
         terminateRequestedAt = SDL_GetTicks64();
@@ -3328,7 +3391,8 @@ int launchEasyRpgGame(const fs::path& launcherRoot, const GameInfo& game, std::s
     return -1;
   }
 
-  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller, exitRequestFile);
+  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller,
+                                           exitRequestFile, false, mouseModeEnabled(game));
   if (WIFEXITED(childStatus)) {
     const int code = WEXITSTATUS(childStatus);
     status = code == 0 ? tr(UiKey::GameExit0)
@@ -3497,7 +3561,8 @@ int launchRgssGame(const fs::path& launcherRoot, const GameInfo& game, std::stri
     status = tr(UiKey::MkxpForkFailed);
     return -1;
   }
-  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller, exitRequestFile, true);
+  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller,
+                                           exitRequestFile, true, mouseModeEnabled(game));
   if (WIFEXITED(childStatus)) {
     const int code = WEXITSTATUS(childStatus);
     if (code == 0)
@@ -3577,7 +3642,8 @@ int launchWebGame(const fs::path& launcherRoot, const GameInfo& game, std::strin
     status = tr(UiKey::MvmzForkFailed);
     return -1;
   }
-  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller, exitRequestFile);
+  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller,
+                                           exitRequestFile, false, mouseModeEnabled(game));
   if (WIFEXITED(childStatus)) {
     const int code = WEXITSTATUS(childStatus);
     status = code == 0 ? tr(UiKey::GameExit0)
@@ -3927,7 +3993,8 @@ int launchWolfExecutable(const fs::path& launcherRoot, const GameInfo& game, boo
     return -1;
   }
 
-  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller, exitRequestFile, true);
+  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller,
+                                           exitRequestFile, true, mouseModeEnabled(game));
   terminateWolfCompatProcesses(compatData);
   if (WIFEXITED(childStatus)) {
     const int code = WEXITSTATUS(childStatus);
@@ -4053,7 +4120,8 @@ int launchProtonCompatibilityGame(const fs::path& launcherRoot, const GameInfo& 
     return -1;
   }
 
-  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller, exitRequestFile, true);
+  const int childStatus = waitForGameChild(pid, window, renderer, fonts, controller,
+                                           exitRequestFile, true, mouseModeEnabled(game));
   terminateWolfCompatProcesses(compatData);
   if (WIFEXITED(childStatus)) {
     const int code = WEXITSTATUS(childStatus);
@@ -4091,6 +4159,60 @@ SDL_GameController* openFirstController() {
     if (SDL_IsGameController(i)) return SDL_GameControllerOpen(i);
   }
   return nullptr;
+}
+
+// One content-fingerprint registry per selected library; never overwrite
+// custom patches.json when a folder is selected again.
+bool ensureLibraryCompatRegistry(const fs::path& library, std::string& detail) {
+  std::error_code ec;
+  if (!fs::is_directory(library, ec)) {
+    detail = "library is not a directory";
+    return false;
+  }
+  const fs::path dir = library / "_compat";
+  fs::create_directories(dir, ec);
+  if (ec) {
+    detail = "cannot create _compat: " + ec.message();
+    return false;
+  }
+  const fs::path json = dir / "patches.json";
+  if (fs::exists(json, ec)) {
+    if (!fs::is_regular_file(json, ec)) {
+      detail = "patches.json is not a regular file";
+      return false;
+    }
+    detail = "preserved existing " + json.string();
+    return true;
+  }
+  if (ec) {
+    detail = "cannot check patches.json: " + ec.message();
+    return false;
+  }
+  const fs::path staged = dir / "patches.json.mkxp-staging";
+  if (fs::exists(staged, ec)) {
+    detail = "staging file exists, not overwriting";
+    return false;
+  }
+  {
+    std::ofstream out(staged, std::ios::binary);
+    if (!out) {
+      detail = "cannot create central registry";
+      return false;
+    }
+    out << "{\n  \"schema\": 2,\n  \"enabled\": true,\n  \"games\": {}\n}\n";
+    out.flush();
+    if (!out.good()) {
+      detail = "cannot write central registry";
+      return false;
+    }
+  }
+  fs::rename(staged, json, ec);
+  if (ec) {
+    detail = "cannot publish central registry: " + ec.message();
+    return false;
+  }
+  detail = "created " + json.string();
+  return true;
 }
 
 } // namespace
@@ -4164,6 +4286,19 @@ int main(int, char**) {
   std::string catalogDiagnostic;
   std::ofstream log(root / "logs/MKXP_Launcher.log", std::ios::app);
   auto reloadGameRoot = [&]() {
+    std::string registryDetail;
+    const bool registryReady = ensureLibraryCompatRegistry(gameRoot, registryDetail);
+#if defined(__linux__)
+    if (registryReady) {
+      const std::string selectedDb = (gameRoot / "_compat/patches.json").string();
+      setenv("RPGMP_PATCH_DB", selectedDb.c_str(), 1);
+    } else {
+      unsetenv("RPGMP_PATCH_DB");
+    }
+#endif
+    log << "central compatibility registry | path=" << gameRoot.string()
+        << " ready=" << (registryReady ? 1 : 0)
+        << " detail=" << registryDetail << '\n';
     allGames = scanGames(gameRoot);
     for (auto& game : allGames) {
       if (isRgssEngine(game.engine)) {
@@ -4203,7 +4338,7 @@ int main(int, char**) {
   };
 
   if (!folderSelectionRequired) reloadGameRoot();
-  log << "launcher start | build=V102 root=" << root.string()
+  log << "launcher start | build=V105 root=" << root.string()
       << " gameRoot=" << (folderSelectionRequired ? std::string("<select-required>") : gameRoot.string())
       << " config=" << configDiagnostic << " uiLanguage=" << uiLanguageCode(gUiLanguage) << '\n';
   log.flush();
@@ -4883,6 +5018,27 @@ int main(int, char**) {
     log.flush();
   };
 
+  auto stepMouseMode = [&](int delta) {
+    if (!gameSettings.active || games.empty() || delta == 0) return;
+    auto& game = games[selected];
+    const bool next = !mouseModeEnabled(game);
+    if (!saveMouseMode(game, next)) {
+      status = uiWord("마우스 모드 저장 실패", "Failed to save mouse mode", "マウスモードの保存に失敗しました");
+      return;
+    }
+    status = uiWord("마우스 모드: ", "Mouse mode: ", "マウスモード: ") + mouseModeLabel(game);
+    log << "mouse mode saved | folder=" << game.folderName
+        << " enabled=" << (next ? 1 : 0) << '\n';
+    log.flush();
+  };
+
+  auto mouseModeSettingsRowFor = [&](const GameInfo& game) -> int {
+    if (isRgssEngine(game.engine)) return protonCompatibilityEnabled(game) ? 8 : 6;
+    if (isWebEngine(game.engine)) return protonCompatibilityEnabled(game) ? 7 : 5;
+    if (isEasyRpgEngine(game.engine)) return 6;
+    if (isWolfRpgEngine(game.engine)) return 4;
+    return 2;
+  };
   auto adjustGameSettingsValue = [&](int delta) {
     if (!gameSettings.active || games.empty()) return;
     const GameInfo& game = games[selected];
@@ -4931,6 +5087,11 @@ int main(int, char**) {
     }
     if (isWolfRpgEngine(game.engine) && gameSettings.row == 2) {
       stepWolfProton(delta);
+      uiSounds.play(UiSoundKind::Move);
+      return;
+    }
+    if (gameSettings.row == mouseModeSettingsRowFor(game)) {
+      stepMouseMode(delta);
       uiSounds.play(UiSoundKind::Move);
       return;
     }
@@ -5139,20 +5300,20 @@ int main(int, char**) {
 
   auto settingsRowCount = [&]() -> int {
     if (games.empty()) return 0;
+    if (isRgssEngine(games[selected].engine)) return protonCompatibilityEnabled(games[selected]) ? 10 : 8;
+    if (isWebEngine(games[selected].engine)) return protonCompatibilityEnabled(games[selected]) ? 9 : 7;
+    if (isEasyRpgEngine(games[selected].engine)) return 8;
+    if (isWolfRpgEngine(games[selected].engine)) return 6;
+    return 4;
+  };
+
+  auto settingsDoneRow = [&]() -> int {
+    if (games.empty()) return 0;
     if (isRgssEngine(games[selected].engine)) return protonCompatibilityEnabled(games[selected]) ? 9 : 7;
     if (isWebEngine(games[selected].engine)) return protonCompatibilityEnabled(games[selected]) ? 8 : 6;
     if (isEasyRpgEngine(games[selected].engine)) return 7;
     if (isWolfRpgEngine(games[selected].engine)) return 5;
     return 3;
-  };
-
-  auto settingsDoneRow = [&]() -> int {
-    if (games.empty()) return 0;
-    if (isRgssEngine(games[selected].engine)) return protonCompatibilityEnabled(games[selected]) ? 8 : 6;
-    if (isWebEngine(games[selected].engine)) return protonCompatibilityEnabled(games[selected]) ? 7 : 5;
-    if (isEasyRpgEngine(games[selected].engine)) return 6;
-    if (isWolfRpgEngine(games[selected].engine)) return 4;
-    return 2;
   };
 
   constexpr int SETTINGS_VISIBLE_MIDDLE_ROWS = 5;
@@ -5292,6 +5453,10 @@ int main(int, char**) {
     }
     if (isWolfRpgEngine(games[selected].engine) && gameSettings.row == 3) {
       runWolfConfig();
+      return;
+    }
+    if (gameSettings.row == mouseModeSettingsRowFor(games[selected])) {
+      stepMouseMode(1);
       return;
     }
     if (gameSettings.row == settingsDoneRow()) closeGameSettings();
@@ -7112,6 +7277,12 @@ int main(int, char**) {
           drawSettingRow(rowRect, active,
                          uiWord("로케일", "Locale", "ロケール"),
                          gameLocaleUiLabel(gameSettings.locale), true);
+          return;
+        }
+        if (actualRow == mouseModeSettingsRowFor(game)) {
+          drawSettingRow(rowRect, active,
+                         uiWord("마우스 모드", "Mouse Mode", "マウスモード"),
+                         mouseModeLabel(game), true);
           return;
         }
 

@@ -3,7 +3,13 @@
 # rpgmakermlinux-cicpoffs / Kawariki RGSS plugin patches.
 
 module Preload
-  Root = File.expand_path(File.join(File.dirname(__FILE__), '..', 'cicpoffs')) unless const_defined?(:Root)
+  # The Android native VM evaluates this script with runCustomScript.
+  # Use the absolute file path from Java, rather than assuming __FILE__
+  # always refers to the installed copy in all Ruby 1.8 builds.
+  AndroidCompatFile = ENV['RPGMP_CICPOFFS_COMPAT'] unless const_defined?(:AndroidCompatFile)
+  SourceFile = (AndroidCompatFile && File.file?(AndroidCompatFile)) ?
+    AndroidCompatFile : __FILE__ unless const_defined?(:SourceFile)
+  Root = File.expand_path(File.join(File.dirname(SourceFile), '..', 'cicpoffs')) unless const_defined?(:Root)
 
   def self.print(text)
     STDOUT.puts('[cicpoffs] ' + text.to_s)
@@ -173,6 +179,8 @@ module Preload
   end
 
   def self.detect_rgss_version
+    named = {'XP'=>1, 'VX'=>2, 'VXACE'=>3}[ENV['RPGMP_RGSS_ENGINE']]
+    return named if named
     begin
       if defined?(CFG) && CFG.respond_to?(:[]) && CFG['rgssVersion']
         v = CFG['rgssVersion'].to_i
@@ -181,7 +189,10 @@ module Preload
     rescue
     end
     begin
-      ini = File.open('Game.ini', 'rb') { |f| f.read }
+      root = ENV['RPGMP_RGSS_GAME_ROOT']
+      path = root && File.file?(File.join(root,'Game.ini')) ?
+        File.join(root,'Game.ini') : 'Game.ini'
+      ini = File.open(path, 'rb') { |f| f.read }
       return 3 if ini.include?('.rvdata2')
       return 2 if ini.include?('.rvdata')
       return 1 if ini.include?('.rxdata')
@@ -463,3 +474,26 @@ module Preload
 end
 
 Preload.apply_cicpoffs_compat
+
+# Optional per-game RGSS JSON patches: execute after existing compatibility
+# passes, before the mkxp-z VM evals the decompressed script sections.
+begin
+  rpgmp_adapter = File.join(File.dirname(Preload::SourceFile), 'rpgmp_rgss_patches.rb')
+  if File.file?(rpgmp_adapter)
+    Kernel.load(rpgmp_adapter)
+  else
+    path = ENV['RPGMP_PATCH_LOG']
+    if path && !path.empty?
+      File.open(path, 'ab') {|f| f.write('[RPGMP-RGSS-PATCH] adapter file missing ' + rpgmp_adapter + "\n")}
+    end
+  end
+rescue Exception => rpgmp_patch_error
+  message = '[RPGMP-RGSS-PATCH] loader skipped ' +
+            rpgmp_patch_error.class.to_s + ': ' + rpgmp_patch_error.to_s
+  STDOUT.puts(message)
+  begin
+    path = ENV['RPGMP_PATCH_LOG']
+    File.open(path, 'ab') {|f| f.write(message + "\n")} if path && !path.empty?
+  rescue Exception
+  end
+end

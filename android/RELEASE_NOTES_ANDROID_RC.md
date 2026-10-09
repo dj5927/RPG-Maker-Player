@@ -1,7 +1,6 @@
-# Android RC4
+# RPG Maker Player Android RC5 (A164)
 
-## RC3 -> RC4
-
-- Fixed RPG Maker MZ startup errors in games using Node.js fs.readdir.
-- Improved MV/MZ automatic screen fitting and low-resolution pixel scaling.
-- Reduced MV/MZ runtime overhead with batched background logging and disabled nonessential diagnostics.
+- Expands the A163 verified WebView Node file-index acceleration from RCSV movie probes to read-only static resource paths for every MV/MZ game; safe invalidation on resource writes, no game-folder filename dependence.
+- Automatically creates _compat/patches.json in the selected game library; preserves edited manifests when reselecting or rescanning.
+- Removes A162 temporary RCSV debug injection and unused Abaddon test rules from the default configuration. Retains content-fingerprint patch framework and previously fixed engine compatibility.
+- Device evidence: A163 fixed the tested summer-vacation game; A164 wider generality still requires broader device regression.

@@ -18,6 +18,7 @@ add_executable(MKXP_Launcher
   src/game_view.cpp
   src/ruby_detector.cpp
   src/launcher_config.cpp
+  src/steam_mouse_bridge.cpp
 )
 
 target_include_directories(MKXP_Launcher PRIVATE src)
@@ -59,4 +60,15 @@ add_executable(MKXP_Game_View_Smoke
 )
 target_include_directories(MKXP_Game_View_Smoke PRIVATE src)
 target_compile_options(MKXP_Game_View_Smoke PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(MKXP_Steam_Mouse_Bridge_Smoke
+  tests/steam_mouse_bridge_smoke.cpp
+  src/steam_mouse_bridge.cpp
+)
+target_include_directories(MKXP_Steam_Mouse_Bridge_Smoke PRIVATE src)
+target_link_libraries(MKXP_Steam_Mouse_Bridge_Smoke PRIVATE
+  PkgConfig::SDL2
+  ${CMAKE_DL_LIBS}
+)
+target_compile_options(MKXP_Steam_Mouse_Bridge_Smoke PRIVATE -Wall -Wextra -Wpedantic)
 install(TARGETS MKXP_Launcher RUNTIME DESTINATION .)

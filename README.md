@@ -6,7 +6,15 @@
 
 **RPG Maker Player** is a SteamOS-focused all-in-one launcher for RPG Maker and WOLF RPG Editor games. It scans one game library folder, detects the engine/runtime, and launches games through the appropriate compatibility layer.
 
-## What's new in v1.3
+## What's new in v1.4
+
+- Selecting or changing the game library automatically prepares
+  _compat/patches.json in that selected folder, preserving existing profiles.
+- SteamOS patch loaders now use the selected-library registry, and unused
+  Abaddon/test-game rules are excluded from the default configuration.
+- v1.4 is an incremental update requiring the existing v1.3 runtime.
+
+## Previously in v1.3
 
 - Added an **Update** item under Settings. It shows the current version and only checks GitHub when you explicitly press **Check for updates**. There is no automatic update check at startup.
 - When a newer release exists, the launcher shows the new version and asks whether to download and install it. OTA packages are SHA-256 verified before extraction.

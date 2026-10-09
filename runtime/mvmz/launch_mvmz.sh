@@ -1,7 +1,7 @@
 #!/bin/bash
 set -u
 
-echo "mvmz runtime patch=V042"
+echo "mvmz runtime patch=V108-json-compat"
 
 ROOT="${1:?launcher root required}"
 GAME="${2:?game root required}"
@@ -182,7 +182,33 @@ cat > "$WORK/package.json" <<EOF
 EOF
 
 MOUNTED=0
-if [ "$COMPAT_PROFILE" != "legacy-mv-modern-nw" ] && [ "${MKXP_MVMZ_DISABLE_CICPOFFS:-0}" != "1" ] && [ -x "$CICPOFFS" ]; then
+PATCHED_WEBROOT=""
+GAME_PATCH_MANIFEST=""
+CENTRAL_PATCH_DB="${RPGMP_PATCH_DB:-$ROOT/_compat/patches.json}"
+if [ -f "$GAME/rpgmp-patches.json" ]; then
+  GAME_PATCH_MANIFEST="$GAME/rpgmp-patches.json"
+elif [ -f "$WEBROOT/rpgmp-patches.json" ]; then
+  GAME_PATCH_MANIFEST="$WEBROOT/rpgmp-patches.json"
+fi
+if [ -n "$GAME_PATCH_MANIFEST" ] || [ -f "$CENTRAL_PATCH_DB" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    PATCH_RESULT="$(python3 "$COMPAT/compat_patch_loader.py" \
+      --webroot "$WEBROOT" --manifest "$GAME_PATCH_MANIFEST" \
+      --central "$CENTRAL_PATCH_DB" \
+      --engine "$ENGINE" --cache "$WORK/patchviews" 2>&1)"
+    PATCH_RC=$?
+    printf '%s\n' "$PATCH_RESULT"
+    if [ "$PATCH_RC" -eq 0 ]; then
+      PATCHED_WEBROOT="$(printf '%s\n' "$PATCH_RESULT" | sed -n 's/^RPGMP_PATCH_VIEW=//p' | tail -n 1)"
+    else
+      echo "[RPGMP-PATCH] invalid manifest; unmodified game launch"
+    fi
+  else
+    echo "[RPGMP-PATCH] python3 unavailable; unmodified game launch"
+  fi
+fi
+
+if [ -z "$PATCHED_WEBROOT" ] && [ "$COMPAT_PROFILE" != "legacy-mv-modern-nw" ] && [ "${MKXP_MVMZ_DISABLE_CICPOFFS:-0}" != "1" ] && [ -x "$CICPOFFS" ]; then
   mkdir -p "$WWW"
   echo "mvmz casefold: trying cicpoffs"
   if "$CICPOFFS" "$WEBROOT" "$WWW"; then
@@ -203,7 +229,10 @@ if [ "$MOUNTED" -eq 1 ]; then
 else
   echo "mvmz casefold: cicpoffs unavailable/failed; using JS casefold fallback"
   cleanup_www
-  if [ "$COMPAT_PROFILE" = "legacy-mv-modern-nw" ] && [ "${MKXP_MVMZ_FORCE_SYMLINK:-0}" != "1" ]; then
+  if [ -n "$PATCHED_WEBROOT" ]; then
+    ln -s "$PATCHED_WEBROOT" "$WWW"
+    echo "[RPGMP-PATCH] isolated game webroot=$PATCHED_WEBROOT"
+  elif [ "$COMPAT_PROFILE" = "legacy-mv-modern-nw" ] && [ "${MKXP_MVMZ_FORCE_SYMLINK:-0}" != "1" ]; then
     mkdir -p "$WWW"
     if cp -al -f "$WEBROOT/." "$WWW/" 2>/dev/null; then
       echo "mvmz webroot mirror=hardlink"

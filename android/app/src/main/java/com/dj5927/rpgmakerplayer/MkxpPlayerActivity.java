@@ -28,10 +28,12 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.List;
 
 public final class MkxpPlayerActivity extends SDLActivity {
@@ -620,10 +622,82 @@ public final class MkxpPlayerActivity extends SDLActivity {
             if (compatRootPath == null || compatRootPath.isEmpty()) return;
             File script = new File(compatRootPath, "compat/common/cicpoffs_compat.rb");
             Os.setenv("RPGMP_CICPOFFS_COMPAT", script.getAbsolutePath(), true);
+            if (gameLogPath != null && !gameLogPath.isEmpty()) {
+                Os.setenv("RPGMP_PATCH_LOG", gameLogPath, true);
+            }
+            if (gamePath != null && !gamePath.isEmpty()) {
+                Os.setenv("RPGMP_RGSS_GAME_ROOT", gamePath, true);
+                Os.setenv("RPGMP_RGSS_ENGINE", engine == null ? "" : engine, true);
+                String extension = "XP".equals(engine) ? "rxdata" :
+                        "VX".equals(engine) ? "rvdata" :
+                        "VXACE".equals(engine) ? "rvdata2" : null;
+                if (extension != null) {
+                    try {
+                        File data = new File(gamePath, "Data");
+                        String scriptsHash = rgssSha256(data, "Scripts." + extension);
+                        String systemHash = rgssSha256(data, "System." + extension);
+                        Os.setenv("RPGMP_PATCH_SHA_SCRIPTS",
+                                scriptsHash == null ? "" : scriptsHash, true);
+                        Os.setenv("RPGMP_PATCH_SHA_SYSTEM",
+                                systemHash == null ? "" : systemHash, true);
+                        GameLog.append(gameLogPath, "PATCH",
+                                "central hash check engine=" + engine +
+                                " scripts=" + (scriptsHash == null ? "missing" : "ready") +
+                                " system=" + (systemHash == null ? "missing" : "ready"));
+                    } catch (Throwable hashError) {
+                        GameLog.append(gameLogPath, "PATCH",
+                                "central hash unavailable: " + hashError.getMessage());
+                    }
+                }
+                File ancestor = new File(gamePath).getAbsoluteFile();
+                while (ancestor != null && !"mkxp".equalsIgnoreCase(ancestor.getName())) {
+                    ancestor = ancestor.getParentFile();
+                }
+                if (ancestor != null) {
+                    File registry = new File(ancestor, "_compat/patches.json");
+                    Os.setenv("RPGMP_PATCH_DB", registry.getAbsolutePath(), true);
+                    if (registry.isFile()) {
+                        GameLog.append(gameLogPath, "PATCH",
+                                "central registry detected=" + registry.getAbsolutePath());
+                    }
+                }
+            }
             android.util.Log.i("RPGMP-MKXP",
                     "COMPAT_ENV cicpoffs=" + script.getAbsolutePath());
         } catch (Throwable t) {
             android.util.Log.w("RPGMP-MKXP", "COMPAT_ENV setup failed", t);
         }
+    }
+
+    // The embedded Ruby 1.8 runtime does not consistently include
+    // digest/sha2. Compute only the two RGSS archive hashes in Android Java
+    // before starting the Ruby VM, independent of any Ruby extension.
+    private static String rgssSha256(File dataDir, String requiredFile) throws Exception {
+        File file = new File(dataDir, requiredFile);
+        if (!file.isFile()) {
+            File[] entries = dataDir.listFiles();
+            if (entries != null) {
+                for (File entry : entries) {
+                    if (entry.isFile() && entry.getName().equalsIgnoreCase(requiredFile)) {
+                        file = entry;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!file.isFile()) return null;
+        MessageDigest hash = MessageDigest.getInstance("SHA-256");
+        try (FileInputStream input = new FileInputStream(file)) {
+            byte[] buffer = new byte[65536];
+            int len;
+            while ((len = input.read(buffer)) != -1) hash.update(buffer, 0, len);
+        }
+        StringBuilder text = new StringBuilder(64);
+        for (byte part : hash.digest()) {
+            int value = part & 255;
+            text.append(Character.forDigit(value >>> 4, 16));
+            text.append(Character.forDigit(value & 15, 16));
+        }
+        return text.toString();
     }
 }

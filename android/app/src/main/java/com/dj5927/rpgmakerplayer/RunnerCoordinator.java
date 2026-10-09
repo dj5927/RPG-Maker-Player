@@ -76,6 +76,14 @@ public final class RunnerCoordinator {
             intent.putExtra(MvMzPlayerActivity.EXTRA_WEB_ROOT_ID, game.webRootDocumentId);
             intent.putExtra(MvMzPlayerActivity.EXTRA_SAVE_ROOT_ID, game.saveRootDocumentId);
             intent.putExtra(MvMzPlayerActivity.EXTRA_TITLE, game.title);
+            File mkxpFolder = rawGameDir;
+            while (mkxpFolder != null && !"mkxp".equalsIgnoreCase(mkxpFolder.getName())) {
+                mkxpFolder = mkxpFolder.getParentFile();
+            }
+            if (mkxpFolder != null) {
+                intent.putExtra(MvMzPlayerActivity.EXTRA_PATCH_DB_PATH,
+                        new File(mkxpFolder, "_compat/patches.json").getAbsolutePath());
+            }
             intent.putExtra(MvMzPlayerActivity.EXTRA_ENGINE, game.engine.name());
             intent.putExtra(MvMzPlayerActivity.EXTRA_PAD_ENABLED, padEnabled(activity, game));
             intent.putExtra(MvMzPlayerActivity.EXTRA_PAD_LARGE, padLarge(activity, game));

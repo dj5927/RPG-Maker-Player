@@ -225,3 +225,12 @@ module Preload
 end
 
 Preload.apply_cicpoffs_compat
+
+# Optional per-game RGSS JSON patch rules, loaded after the existing
+# compatibility passes and before mkxp-z evaluates decompressed game scripts.
+begin
+  rpgmp_user_patches = File.join(File.dirname(__FILE__), 'rpgmp_rgss_patches.rb')
+  Kernel.load(rpgmp_user_patches) if File.file?(rpgmp_user_patches)
+rescue Exception => rpgmp_patch_error
+  STDOUT.puts('[RPGMP-RGSS-PATCH] loader skipped ' + rpgmp_patch_error.to_s)
+end

@@ -47,6 +47,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class MvMzPlayerActivity extends Activity {
     public static final String EXTRA_TREE_URI = "treeUri";
@@ -61,6 +62,7 @@ public final class MvMzPlayerActivity extends Activity {
     public static final String EXTRA_LOCALE = "locale";
     public static final String EXTRA_MOUSE_MODE = "mouseMode";
     public static final String EXTRA_LOG_PATH = "logPath";
+    public static final String EXTRA_PATCH_DB_PATH = "centralPatchDbPath";
     private static final String HOST = "rpgmaker.local";
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -97,6 +99,11 @@ public final class MvMzPlayerActivity extends Activity {
     private final Map<String, String> pathToDocumentId = new HashMap<>();
     private final Map<String, String> pathToDocumentIdLower = new HashMap<>();
     private final Map<String, String> pathToDocumentIdCompat = new HashMap<>();
+    private volatile boolean webIndexComplete;
+    private volatile boolean staticResourceIndexValid = true;
+    private final Map<String, String> indexedResourceDirectories = new HashMap<>();
+    private final Map<String, List<String>> indexedResourceChildren = new HashMap<>();
+    private final AtomicInteger indexedMovieExistenceQueries = new AtomicInteger();
     private Uri treeUri;
     private String webRootId;
     private String saveRootId;
@@ -110,6 +117,7 @@ public final class MvMzPlayerActivity extends Activity {
     private final Map<String, String> legacyLocalStorageRawCache = new HashMap<>();
     private WebView webView;
     private MvMzCompatibility.Profile compatibilityProfile;
+    private MvMzGamePatches gamePatches = MvMzGamePatches.empty();
     private String renderMode = "AUTO";
     private int[] keyMap;
     private boolean exitDialogVisible;
@@ -201,6 +209,7 @@ public final class MvMzPlayerActivity extends Activity {
         worker.submit(() -> {
             try {
                 buildIndex();
+                loadGamePatches();
                 prepareGameFolderSaveCache();
                 runOnUiThread(() -> {
                     try {
@@ -234,7 +243,40 @@ public final class MvMzPlayerActivity extends Activity {
         view.setText(message + "\n\n뒤로가기를 누르면 런처로 돌아갑니다.");
     }
 
+    private void loadGamePatches() {
+        InputStream central = MvMzCentralPatches.findManifest(
+                getContentResolver(), treeUri,
+                getIntent().getStringExtra(EXTRA_PATCH_DB_PATH),
+                path -> {
+                    String docId = resolveIndexedDocumentId("/" + path);
+                    return docId == null ? null : getContentResolver().openInputStream(
+                            GameScanner.documentUri(treeUri, docId));
+                },
+                engineName,
+                message -> GameLog.append(gameLogPath, "PATCH", message));
+        if (central != null) {
+            gamePatches = MvMzGamePatches.load(central, engineName,
+                    message -> GameLog.append(gameLogPath, "PATCH", message));
+            return;
+        }
+        String id = resolveIndexedDocumentId("/rpgmp-patches.json");
+        if (id == null) return;
+        try {
+            InputStream in = getContentResolver().openInputStream(
+                    GameScanner.documentUri(treeUri, id));
+            gamePatches = MvMzGamePatches.load(in, engineName,
+                    message -> GameLog.append(gameLogPath, "PATCH", message));
+        } catch (Exception error) {
+            GameLog.append(gameLogPath, "PATCH",
+                    "manifest load skipped: " + String.valueOf(error));
+        }
+    }
+
     private void buildIndex() throws Exception {
+        webIndexComplete = false;
+        staticResourceIndexValid = true;
+        indexedResourceDirectories.clear();
+        indexedResourceChildren.clear();
         ArrayDeque<PathNode> queue = new ArrayDeque<>();
         queue.add(new PathNode(webRootId, ""));
         int visited = 0;
@@ -242,10 +284,15 @@ public final class MvMzPlayerActivity extends Activity {
             PathNode node = queue.removeFirst();
             visited++;
             List<GameScanner.Child> children = GameScanner.listChildren(this, treeUri, node.documentId);
+            ArrayList<String> childNames = new ArrayList<>(children.size());
             for (GameScanner.Child child : children) {
+                childNames.add(child.name);
                 if (node.path.isEmpty() && child.directory && "saves".equalsIgnoreCase(child.name)) continue;
                 String path = node.path.isEmpty() ? child.name : node.path + "/" + child.name;
-                if (child.directory) queue.addLast(new PathNode(child.documentId, path));
+                if (child.directory) {
+                    queue.addLast(new PathNode(child.documentId, path));
+                    indexedResourceDirectories.put(compatPathKey("/" + path), child.documentId);
+                }
                 else {
                     String webPath = "/" + path;
                     pathToDocumentId.put(webPath, child.documentId);
@@ -258,7 +305,9 @@ public final class MvMzPlayerActivity extends Activity {
                     }
                 }
             }
+            indexedResourceChildren.put(compatPathKey("/" + node.path), childNames);
         }
+        webIndexComplete = queue.isEmpty();
         compatibilityProfile = MvMzCompatibility.inspect(
                 pathToDocumentId.keySet(), getIntent().getStringExtra(EXTRA_ENGINE));
         compatibilityProfile.pixiTextureSlotRisk = detectPixiTextureSlotRisk();
@@ -531,6 +580,13 @@ public final class MvMzPlayerActivity extends Activity {
                         android.util.Log.w("RPGMP-MVMZ", "RESOURCE_OPEN_NULL " + path);
                         GameLog.append(gameLogPath, "RESOURCE", "OPEN_NULL " + path);
                         return notFoundResponse(path);
+                    }
+                    // Apply manifest replacements to the ORIGINAL game bytes.
+                    // This keeps sha256_before consistent with SteamOS and
+                    // leaves built-in Android compatibility rewrites afterward.
+                    if (gamePatches.has(path)) {
+                        input = gamePatches.apply(path, input,
+                                message -> GameLog.append(gameLogPath, "PATCH", message));
                     }
                     if (path.equalsIgnoreCase("/index.html") && input != null && compatibilityProfile != null) {
                         input = MvMzCompatibility.rewriteIndexHtml(input, compatibilityProfile);
@@ -1291,6 +1347,69 @@ public final class MvMzPlayerActivity extends Activity {
         return chooseNodeSaveCandidate(normalized, legacy, web, oldWeb);
     }
 
+    // All MV/MZ games may use NW.js fs.existsSync/statSync/readdirSync
+    // synchronously, even if their data is JSON, CSV, RCSV, or something else.
+    // Only immutable game resources are accelerated. Save/config paths use the
+    // original SAF resolver, and any game write into resource paths disables
+    // the snapshot for the rest of the session to avoid stale negative caches.
+    private String indexedStaticResourcePath(String rawPath) {
+        if (!webIndexComplete || !staticResourceIndexValid) return null;
+        String normalized = normalizeNodePath(rawPath);
+        if (normalized == null) return null;
+        String relative;
+        if (saveRootId != null && saveRootId.equals(webRootId)) {
+            relative = normalized;
+        } else {
+            if (!normalized.startsWith("www/")) return null;
+            relative = normalized.substring(4);
+        }
+        String lower = relative.toLowerCase(Locale.ROOT);
+        int slash = lower.indexOf('/');
+        String top = slash < 0 ? lower : lower.substring(0, slash);
+        if (!("movies".equals(top) || "img".equals(top) || "audio".equals(top) ||
+                "data".equals(top) || "js".equals(top) || "fonts".equals(top) ||
+                "css".equals(top))) return null;
+        return "/" + relative;
+    }
+
+    private Boolean indexedStaticResourceExists(String path) {
+        String resource = indexedStaticResourcePath(path);
+        if (resource == null) return null;
+        boolean exists = resolveIndexedDocumentId(resource) != null ||
+                indexedResourceDirectories.containsKey(compatPathKey(resource));
+        int count = indexedMovieExistenceQueries.incrementAndGet();
+        if (count == 1 || count == 100 || count == 250 || count == 500) {
+            GameLog.append(gameLogPath, "NODE",
+                    "indexed static exists checks=" + count +
+                            " lastFound=" + exists);
+        }
+        return exists;
+    }
+
+    private Integer indexedStaticResourceType(String path) {
+        String resource = indexedStaticResourcePath(path);
+        if (resource == null) return null;
+        if (indexedResourceDirectories.containsKey(compatPathKey(resource))) return 2;
+        return resolveIndexedDocumentId(resource) != null ? 1 : 0;
+    }
+
+    private String indexedStaticResourceListing(String path) {
+        String resource = indexedStaticResourcePath(path);
+        if (resource == null) return null;
+        List<String> children = indexedResourceChildren.get(compatPathKey(resource));
+        if (children == null) return null;
+        JSONArray result = new JSONArray();
+        for (String child : children) result.put(child);
+        return result.toString();
+    }
+
+    private void invalidateStaticResourceIndex(String path) {
+        if (indexedStaticResourcePath(path) != null) {
+            staticResourceIndexValid = false;
+            GameLog.append(gameLogPath, "NODE", "static index invalidated by write: " + path);
+        }
+    }
+
     private NodeDoc chooseNodeSaveCandidate(String normalized, String legacy,
                                             NodeDoc normal, NodeDoc old) {
         if (normal == null && old == null) return null;
@@ -1474,16 +1593,26 @@ public final class MvMzPlayerActivity extends Activity {
         }
 
         @JavascriptInterface public boolean exists(String path) {
-            try { return resolveNodeRead(path) != null; } catch (Exception ignored) { return false; }
+            try {
+                Boolean indexed = indexedStaticResourceExists(path);
+                if (indexed != null) return indexed;
+                return resolveNodeRead(path) != null;
+            } catch (Exception ignored) { return false; }
         }
 
         @JavascriptInterface public int statType(String path) {
-            try { NodeDoc d = resolveNodeRead(path); return d == null ? 0 : (d.directory ? 2 : 1); }
+            try {
+                Integer indexed = indexedStaticResourceType(path);
+                if (indexed != null) return indexed;
+                NodeDoc d = resolveNodeRead(path); return d == null ? 0 : (d.directory ? 2 : 1);
+            }
             catch (Exception ignored) { return 0; }
         }
 
         @JavascriptInterface public String list(String path) {
             try {
+                String indexed = indexedStaticResourceListing(path);
+                if (indexed != null) return indexed;
                 NodeDoc d = resolveNodeRead(path);
                 if (d == null || !d.directory) return "[]";
                 JSONArray result = new JSONArray();
@@ -1493,12 +1622,13 @@ public final class MvMzPlayerActivity extends Activity {
         }
 
         @JavascriptInterface public boolean mkdir(String path) {
-            try { String p = normalizeNodePath(path); if (p == null) return false; ensureNodeDirectory(p); return true; }
+            try { String p = normalizeNodePath(path); if (p == null) return false; invalidateStaticResourceIndex(path); ensureNodeDirectory(p); return true; }
             catch (Exception e) { android.util.Log.w("RPGMP-NODE", "mkdir failed path=" + path, e); return false; }
         }
 
         @JavascriptInterface public boolean writeBase64(String path, String base64) {
             try {
+                invalidateStaticResourceIndex(path);
                 boolean ok = writeNodeBytes(path, Base64.decode(base64 == null ? "" : base64, Base64.DEFAULT));
                 if (ok && isNodeSavePath(normalizeNodePath(path))) {
                     android.util.Log.i("RPGMP-NODE", "write save path=" + path);
@@ -1510,6 +1640,7 @@ public final class MvMzPlayerActivity extends Activity {
 
         @JavascriptInterface public boolean touch(String path, boolean truncate) {
             try {
+                if (truncate) invalidateStaticResourceIndex(path);
                 NodeDoc existing = resolveNodeWrite(path);
                 if (existing != null && !truncate) return !existing.directory;
                 return writeNodeBytes(path, new byte[0]);
@@ -1518,6 +1649,7 @@ public final class MvMzPlayerActivity extends Activity {
 
         @JavascriptInterface public boolean remove(String path) {
             try {
+                invalidateStaticResourceIndex(path);
                 NodeDoc d = resolveNodeWrite(path);
                 return d != null && DocumentsContract.deleteDocument(getContentResolver(), GameScanner.documentUri(treeUri, d.documentId));
             } catch (Exception e) { return false; }
@@ -1525,6 +1657,8 @@ public final class MvMzPlayerActivity extends Activity {
 
         @JavascriptInterface public boolean rename(String from, String to) {
             try {
+                invalidateStaticResourceIndex(from);
+                invalidateStaticResourceIndex(to);
                 NodeDoc src = resolveNodeRead(from);
                 if (src == null || src.directory) return false;
                 String encoded = readBase64(from);
