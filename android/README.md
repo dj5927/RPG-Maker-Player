@@ -23,7 +23,7 @@ Any other Android system language falls back to English.
 
 ## Current pre-release candidate
 
-RC5 / Android app version `0.16.4-a164`.
+RC6 / Android app version `0.16.5-a165`.
 
 Selected libraries automatically create an empty _compat/patches.json file
 without overwriting user patches. Static MV/MZ NW.js file lookups reuse the
@@ -45,3 +45,5 @@ complete resource index regardless of JSON/CSV/RCSV; saves use live storage.
 Large/generated binaries are intentionally not tracked in the Git source tree. The release APK and required redistributable runtime payloads are published as GitHub Release assets. Android SDK/NDK, Gradle caches, build outputs, personal logs and game files are never committed.
 
 See `BUILDING_ANDROID.md`, `THIRD_PARTY_ANDROID.md` and `PUBLISH_CHECKLIST.md`.
+
+RC6 restores four previously verified exact-hash XP fixes for The Curse of Pleasure that were accidentally omitted in RC5. Existing user profiles are preserved and backed up before migration. Abaddon test rules remain excluded.

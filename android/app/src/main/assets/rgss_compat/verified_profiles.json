@@ -1,0 +1,54 @@
+{
+  "schema": 2,
+  "enabled": true,
+  "games": {
+    "curse_of_pleasure_v1": {
+      "engine": "XP",
+      "enabled": true,
+      "fingerprints": [
+        {
+          "Data/Scripts.rxdata": "7682cdd0dcd085cdd6ad7abb7b451d5fb060f43908db8e026e62204bb93db0b5",
+          "Data/System.rxdata": "9d308a61c843e5cadac2d9a40ddf321714ed97c76e3c18d6f497a951b425dfd8"
+        }
+      ],
+      "patches": [
+        {
+          "id": "curse-xp-mci-filter-nil-rtp-paths",
+          "engine": "XP",
+          "section": "Audio Extra (fixed)",
+          "section_index": 287,
+          "find": "paths = paths.find_all {|path| path != '' }",
+          "replace": "paths = paths.find_all {|path| path.is_a?(String) && path != '' }",
+          "expected_matches": 1
+        },
+        {
+          "id": "curse-xp-mci-missing-commonprogramfiles",
+          "engine": "XP",
+          "section": "Audio Extra (fixed)",
+          "section_index": 287,
+          "find": "common = File.join(ENV['CommonProgramFiles'], 'Enterbrain')",
+          "replace": "common = File.join(ENV['CommonProgramFiles'] || '', 'Enterbrain')",
+          "expected_matches": 1
+        },
+        {
+          "id": "curse-xp-fade-regex-literal-braces-mask",
+          "engine": "XP",
+          "section": "Drago Fade Effect Room",
+          "section_index": 293,
+          "find": "if parameter =~ /{(\\d+),(\\d+),(\\d+),(\\d+)}/",
+          "replace": "if parameter =~ /\\{(\\d+),(\\d+),(\\d+),(\\d+)\\}/",
+          "expected_matches": 1
+        },
+        {
+          "id": "curse-xp-fade-regex-literal-braces-rect",
+          "engine": "XP",
+          "section": "Drago Fade Effect Room",
+          "section_index": 293,
+          "find": "if parameter =~ /<{(\\d+),(\\d+),(\\d+),(\\d+)}>/",
+          "replace": "if parameter =~ /<\\{(\\d+),(\\d+),(\\d+),(\\d+)\\}>/",
+          "expected_matches": 1
+        }
+      ]
+    }
+  }
+}
