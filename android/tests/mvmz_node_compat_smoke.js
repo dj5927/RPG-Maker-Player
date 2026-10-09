@@ -42,4 +42,24 @@ assert.strictEqual(path.normalize('/www/save/'), '/www/save/');
 assert.strictEqual(path.dirname('/www/index.html'), '/www');
 assert.strictEqual(path.relative('/www/save/', '/www/save/file1.rpgsave'), 'file1.rpgsave');
 
+const nw = window.require('nw.gui');
+const win = nw.Window.get();
+assert.strictEqual(typeof win.on, 'function');
+assert.strictEqual(typeof win.once, 'function');
+assert.strictEqual(typeof win.removeListener, 'function');
+assert.strictEqual(typeof win.removeAllListeners, 'function');
+assert.strictEqual(typeof win.emit, 'function');
+let focusCount = 0;
+const onFocus = () => { focusCount += 1; };
+assert.strictEqual(win.on('focus', onFocus), win);
+assert.strictEqual(win.emit('focus'), true);
+assert.strictEqual(focusCount, 1);
+win.removeListener('focus', onFocus);
+assert.strictEqual(win.emit('focus'), false);
+let closeCount = 0;
+assert.strictEqual(win.once('close', () => { closeCount += 1; }), win);
+win.emit('close');
+win.emit('close');
+assert.strictEqual(closeCount, 1);
+
 console.log('MVMZ_NODE_COMPAT_SMOKE_PASS');

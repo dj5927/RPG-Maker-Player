@@ -23,7 +23,7 @@ Any other Android system language falls back to English.
 
 ## Current pre-release candidate
 
-RC2 / Android app version `0.14.9-a149`.
+RC3 / Android app version `0.15.0-a150`.
 
 ## Source layout
 

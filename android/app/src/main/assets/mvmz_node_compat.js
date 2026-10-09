@@ -187,7 +187,53 @@
   fsModule.unlink = function (p, cb) { try { fsModule.unlinkSync(p); setTimeout(function () { cb && cb(null); }, 0); } catch (e) { setTimeout(function () { cb && cb(e); }, 0); } };
   fsModule.rename = function (a, b, cb) { try { fsModule.renameSync(a, b); setTimeout(function () { cb && cb(null); }, 0); } catch (e) { setTimeout(function () { cb && cb(e); }, 0); } };
 
+  var winEvents = Object.create(null);
+  function addWindowListener(name, listener, once) {
+    name = String(name || '');
+    if (typeof listener !== 'function') return winStub;
+    var list = winEvents[name] || (winEvents[name] = []);
+    list.push({ fn: listener, once: !!once });
+    return winStub;
+  }
+  function removeWindowListener(name, listener) {
+    name = String(name || '');
+    var list = winEvents[name];
+    if (!list) return winStub;
+    if (typeof listener !== 'function') {
+      delete winEvents[name];
+      return winStub;
+    }
+    winEvents[name] = list.filter(function (entry) { return entry.fn !== listener; });
+    if (!winEvents[name].length) delete winEvents[name];
+    return winStub;
+  }
+  function emitWindowEvent(name) {
+    name = String(name || '');
+    var list = winEvents[name];
+    if (!list || !list.length) return false;
+    var args = Array.prototype.slice.call(arguments, 1);
+    list.slice().forEach(function (entry) {
+      if (entry.once) removeWindowListener(name, entry.fn);
+      try { entry.fn.apply(winStub, args); }
+      catch (e) { setTimeout(function () { throw e; }, 0); }
+    });
+    return true;
+  }
   var winStub = {
+    on: function (name, listener) { return addWindowListener(name, listener, false); },
+    addListener: function (name, listener) { return addWindowListener(name, listener, false); },
+    once: function (name, listener) { return addWindowListener(name, listener, true); },
+    off: function (name, listener) { return removeWindowListener(name, listener); },
+    removeListener: function (name, listener) { return removeWindowListener(name, listener); },
+    removeAllListeners: function (name) {
+      if (name == null) winEvents = Object.create(null);
+      else delete winEvents[String(name)];
+      return winStub;
+    },
+    emit: emitWindowEvent,
+    listeners: function (name) {
+      return (winEvents[String(name || '')] || []).map(function (entry) { return entry.fn; });
+    },
     showDevTools: function () { return null; }, isDevToolsOpen: function () { return false; },
     close: function () {}, focus: function () {}, blur: function () {}, show: function () {}, hide: function () {},
     minimize: function () {}, maximize: function () {}, restore: function () {}, moveTo: function () {}, moveBy: function () {},
