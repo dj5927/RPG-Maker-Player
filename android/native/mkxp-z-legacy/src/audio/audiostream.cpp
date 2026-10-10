@@ -20,6 +20,7 @@
 */
 
 #include "audiostream.h"
+#include "aldatasource.h"
 
 #include "src/util/util.h"
 #include "exception.h"
@@ -118,6 +119,15 @@ void AudioStream::play(const std::string &filename,
 	{
 		try
 		{
+			/* JoiPlay's transition order stops the previous stream first.
+			 * Restrict this to real MIDI sources to leave PCM/OGG paths intact.
+			 * Destroying MidiSource releases its synthesizer before the next
+			 * one can be allocated; it also prevents any old AL queue playing. */
+			if (diffFile && stream.source && stream.source->isMidi())
+			{
+				stream.stop();
+				stream.close();
+			}
 			/* This will throw on errors while
 			 * opening the data source */
 			stream.open(filename);

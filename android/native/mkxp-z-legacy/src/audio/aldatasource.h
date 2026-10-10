@@ -36,6 +36,9 @@ struct ALDataSource
 
 	virtual ~ALDataSource() {}
 
+	/* Preserve the actual decoded type even when game scripts omit .mid. */
+	virtual bool isMidi() const { return false; }
+
 	/* Read/process next chunk of data, and attach it
 	 * to provided AL buffer */
 	virtual Status fillBuffer(AL::Buffer::ID alBuffer) = 0;

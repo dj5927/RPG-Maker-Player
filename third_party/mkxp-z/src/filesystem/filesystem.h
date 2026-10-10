@@ -24,6 +24,7 @@
 
 #include <SDL_rwops.h>
 #include <string>
+#include <vector>
 
 #include "filesystemImpl.h"
 
@@ -79,9 +80,21 @@ public:
 	/* Does not perform extension supplementing */
 	bool exists(const char *filename);
 
+	/* SteamOS RGSS compatibility: resolve a READ-ONLY virtual game resource
+	 * using the same case-insensitive PhysFS cache as Bitmap and Audio.
+	 * Only game asset directories are eligible; saves, user settings,
+	 * absolute paths and traversal paths are rejected. */
+	bool resourceExists(const char *filename, bool fileOnly = false);
+	bool resourceDirectory(const char *filename);
+	bool resourceEntries(const char *filename, std::vector<std::string> &entries);
+	bool resourceDiskPath(const char *filename, std::string &diskPath,
+	                      bool directoryOnly = false);
+
 	const char *desensitize(const char *filename);
 
 private:
+	bool findResource(const char *filename, std::string &virtualPath,
+	                  bool fileOnly);
 	FileSystemPrivate *p;
 };
 

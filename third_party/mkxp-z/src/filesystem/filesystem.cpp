@@ -34,9 +34,14 @@
 #include <physfs.h>
 
 #include <algorithm>
+#include <dirent.h>
+#include <map>
+#include <set>
 #include <stack>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 
@@ -262,12 +267,18 @@ static void initReadOps(PHYSFS_File *handle, SDL_RWops &ops, bool freeOnClose) {
 
 static void strTolower(std::string &str) {
   for (size_t i = 0; i < str.size(); ++i)
-    str[i] = tolower(str[i]);
+    str[i] = static_cast<char>(tolower(static_cast<unsigned char>(str[i])));
 }
 
 const Uint32 SDL_RWOPS_PHYSFS = SDL_RWOPS_UNKNOWN + 10;
 
 struct FileSystemPrivate {
+  struct ResourceMount {
+    std::string path;
+    bool directory = false;
+    BoostHash<std::string, std::string> casePaths;
+  };
+
   /* Maps: lower case full filepath,
    * To:   mixed case full filepath */
   BoostHash<std::string, std::string> pathCache;
@@ -278,6 +289,11 @@ struct FileSystemPrivate {
   /* This is for compatibility with games that take Windows'
    * case insensitivity for granted */
   bool havePathCache;
+
+  /* Per-mounted-directory ASCII case index. PHYSFS_enumerate merges mounts
+   * before callback invocation, and can hide distinct names on lower-priority
+   * mounts. Store every mount separately in PHYSFS search order. */
+  std::vector<ResourceMount> resourceMounts;
 };
 
 static void throwPhysfsError(const char *desc) {
@@ -355,6 +371,7 @@ void FileSystem::removePath(const char *path, bool reload) {
 struct CacheEnumData {
   FileSystemPrivate *p;
   std::stack<std::vector<std::string> *> fileLists;
+  std::vector<std::string> mountOrder;
 
 #ifdef __APPLE__
   iconv_t nfd2nfc;
@@ -362,6 +379,13 @@ struct CacheEnumData {
 #endif
 
   CacheEnumData(FileSystemPrivate *p) : p(p) {
+    /* Preserve PhysFS search priority: game, then user RTP, then shared RTP. */
+    char **paths = PHYSFS_getSearchPath();
+    if (paths) {
+      for (char **entry = paths; *entry; ++entry)
+        mountOrder.push_back(*entry);
+      PHYSFS_freeList(paths);
+    }
 #ifdef __APPLE__
     nfd2nfc = iconv_open("utf-8", "utf-8-mac");
 #endif
@@ -371,6 +395,14 @@ struct CacheEnumData {
 #ifdef __APPLE__
     iconv_close(nfd2nfc);
 #endif
+  }
+
+  size_t priority(const std::string &filename) const {
+    const char *source = PHYSFS_getRealDir(filename.c_str());
+    if (!source) return mountOrder.size();
+    for (size_t i = 0; i < mountOrder.size(); ++i)
+      if (mountOrder[i] == source) return i;
+    return mountOrder.size();
   }
 
   /* Converts in-place */
@@ -418,6 +450,11 @@ static PHYSFS_EnumerateCallbackResult cacheEnumCB(void *d, const char *origdir,
   PHYSFS_stat(fullPath, &stat);
 
   if (stat.filetype == PHYSFS_FILETYPE_DIRECTORY) {
+	/* Index directories too: Ruby's FileTest.directory? and read-only
+	 * File.open under e.g. graphics/Pictures require corrected parents. */
+	if (!data.p->pathCache.contains(lowerCase) ||
+	    data.priority(mixedCase) < data.priority(data.p->pathCache[lowerCase]))
+	  data.p->pathCache.insert(lowerCase, mixedCase);
     /* Create a new list for this directory */
     std::vector<std::string> &list = data.p->fileLists[lowerCase];
 
@@ -435,10 +472,121 @@ static PHYSFS_EnumerateCallbackResult cacheEnumCB(void *d, const char *origdir,
     list.push_back(lowerFilename);
 
     /* Add the lower -> mixed mapping of the file's full path */
-    data.p->pathCache.insert(lowerCase, mixedCase);
+    if (!data.p->pathCache.contains(lowerCase) ||
+        data.priority(mixedCase) < data.priority(data.p->pathCache[lowerCase]))
+      data.p->pathCache.insert(lowerCase, mixedCase);
   }
 
   return PHYSFS_ENUM_OK;
+}
+
+/* Enumerate each physical mount independently instead of trusting the
+ * merged PHYSFS_enumerate result for case-colliding files. The resulting
+ * paths are read-only; symlinks are ignored to avoid escaping a game root. */
+static void indexResourceMountDirectory(FileSystemPrivate *state,
+                                        FileSystemPrivate::ResourceMount &mount,
+                                        const std::string &relative,
+                                        unsigned depth, size_t &visited,
+                                        std::map<std::string, std::set<std::string>> &knownFiles) {
+  if (depth > 24 || visited >= 400000 ||
+      (shState && shState->rtData().rqTerm)) return;
+  const std::string fullDir = mount.path +
+      (relative.empty() ? "" : "/" + relative);
+  DIR *dir = opendir(fullDir.c_str());
+  if (!dir) return;
+  std::vector<std::string> names;
+  for (struct dirent *item = readdir(dir); item; item = readdir(dir)) {
+    if (strcmp(item->d_name, ".") && strcmp(item->d_name, ".."))
+      names.push_back(item->d_name);
+  }
+  closedir(dir);
+  std::sort(names.begin(), names.end());
+
+  for (size_t i = 0; i < names.size() && visited < 400000; ++i) {
+    const std::string &name = names[i];
+    if (relative.empty()) {
+      std::string rootName = name;
+      strTolower(rootName);
+      if (rootName != "graphics" && rootName != "audio" &&
+          rootName != "data" && rootName != "fonts" &&
+          rootName != "movies") continue;
+    }
+    const std::string path = relative.empty() ? name : relative + "/" + name;
+    if (path.size() > 4096) continue;
+    struct stat statData;
+    if (lstat((mount.path + "/" + path).c_str(), &statData) != 0 ||
+        (!S_ISDIR(statData.st_mode) && !S_ISREG(statData.st_mode)))
+      continue;
+    ++visited;
+    std::string lowerPath = path;
+    strTolower(lowerPath);
+    if (!mount.casePaths.contains(lowerPath))
+      mount.casePaths.insert(lowerPath, path);
+
+    if (S_ISDIR(statData.st_mode)) {
+      indexResourceMountDirectory(state, mount, path, depth + 1, visited,
+                                  knownFiles);
+    } else {
+      const size_t lastSlash = lowerPath.find_last_of('/');
+      const std::string dirKey = lastSlash == std::string::npos ? "" :
+                                 lowerPath.substr(0, lastSlash);
+      const std::string basename = lastSlash == std::string::npos ?
+                                   lowerPath : lowerPath.substr(lastSlash + 1);
+      /* PhysFS already indexed most filenames. Avoid doubling the directory
+       * listing and repeatedly sorting identical filenames at load time. */
+      if (knownFiles[dirKey].insert(basename).second)
+        state->fileLists[dirKey].push_back(basename);
+    }
+  }
+}
+
+static size_t physfsMountPriority(const std::vector<FileSystemPrivate::ResourceMount> &mounts,
+                                 const std::string &path) {
+  const char *root = PHYSFS_getRealDir(path.c_str());
+  if (!root) return mounts.size();
+  for (size_t i = 0; i < mounts.size(); ++i)
+    if (mounts[i].path == root) return i;
+  return mounts.size();
+}
+
+static void createOrderedResourceMountCache(FileSystemPrivate *p) {
+  p->resourceMounts.clear();
+  std::map<std::string, std::set<std::string>> knownFiles;
+  for (auto it = p->fileLists.cbegin(); it != p->fileLists.cend(); ++it)
+    knownFiles[it->first].insert(it->second.begin(), it->second.end());
+  char **paths = PHYSFS_getSearchPath();
+  if (!paths) return;
+  for (char **entry = paths; *entry; ++entry) {
+    FileSystemPrivate::ResourceMount mount;
+    mount.path = *entry;
+    struct stat mounted;
+    mount.directory = (stat(mount.path.c_str(), &mounted) == 0 &&
+                       S_ISDIR(mounted.st_mode));
+    if (mount.directory) {
+      size_t visited = 0;
+      indexResourceMountDirectory(p, mount, "", 0, visited, knownFiles);
+    }
+    p->resourceMounts.push_back(std::move(mount));
+  }
+  PHYSFS_freeList(paths);
+
+  /* Keep RGSS archive matches supplied by PhysFS, but re-evaluate regular
+   * files per mount in reverse order: game-local resources beat RTP files
+   * regardless of casing. */
+  for (size_t i = p->resourceMounts.size(); i > 0; --i) {
+    const size_t priority = i - 1;
+    const FileSystemPrivate::ResourceMount &mount = p->resourceMounts[priority];
+    if (!mount.directory) continue;
+    for (auto it = mount.casePaths.cbegin(); it != mount.casePaths.cend(); ++it) {
+      const std::string &lower = it->first;
+      if (p->pathCache.contains(lower)) {
+        const size_t existing = physfsMountPriority(p->resourceMounts,
+                                                   p->pathCache[lower]);
+        if (existing <= priority) continue;
+      }
+      p->pathCache.insert(lower, it->second);
+    }
+  }
 }
 
 void FileSystem::createPathCache() {
@@ -447,6 +595,8 @@ void FileSystem::createPathCache() {
   CacheEnumData data(p);
   data.fileLists.push(&p->fileLists[""]);
   PHYSFS_enumerate("", cacheEnumCB, &data);
+
+  createOrderedResourceMountCache(p);
 
   p->havePathCache = true;
 
@@ -458,6 +608,7 @@ void FileSystem::reloadPathCache() {
     
     p->fileLists.clear();
     p->pathCache.clear();
+    p->resourceMounts.clear();
     createPathCache();
 }
 
@@ -666,7 +817,11 @@ void FileSystem::openRead(OpenHandler &handler, const char *filename) {
 void FileSystem::openReadRaw(SDL_RWops &ops, const char *filename,
                              bool freeOnClose) {
 
-  PHYSFS_File *handle = PHYSFS_openRead(normalize(filename, 0, 0).c_str());
+  std::string path = normalize(filename, false, false);
+  std::string resolved;
+  if (findResource(filename, resolved, true))
+    path = resolved;
+  PHYSFS_File *handle = PHYSFS_openRead(path.c_str());
 
   if (!handle)
     throw Exception(Exception::NoFileError, "%s", filename);
@@ -681,15 +836,196 @@ std::string FileSystem::normalize(const char *pathname, bool preferred,
 }
 
 bool FileSystem::exists(const char *filename) {
-  return PHYSFS_exists(normalize(filename, false, false).c_str());
+  const std::string path = normalize(filename, false, false);
+  if (PHYSFS_exists(path.c_str()))
+    return true;
+  return resourceExists(filename);
+}
+
+/* Lowercase only ASCII bytes. UTF-8 game filenames stay byte-for-byte
+ * unchanged outside ASCII; never pass negative signed chars to tolower(). */
+static std::string resourceLower(std::string text) {
+  for (size_t i = 0; i < text.size(); ++i) {
+    const unsigned char c = static_cast<unsigned char>(text[i]);
+    if (c >= 'A' && c <= 'Z') text[i] = static_cast<char>(c + ('a' - 'A'));
+  }
+  return text;
+}
+
+/* Allow relative virtual assets only; NEVER normalize ../ into an allowed
+ * path or redirect a save/config/system file through the RTP mounts. */
+static std::string safeGameResourcePath(const char *filename) {
+  if (!filename) return std::string();
+  std::string path(filename);
+  if (path.empty() || path.size() > 4096 || path.find(':') != std::string::npos)
+    return std::string();
+  std::replace(path.begin(), path.end(), '\\', '/');
+  while (path.compare(0, 2, "./") == 0) path.erase(0, 2);
+  if (path.empty() || path[0] == '/') return std::string();
+  size_t offset = 0;
+  std::string root;
+  while (offset < path.size()) {
+    const size_t slash = path.find('/', offset);
+    const std::string part = path.substr(offset, slash == std::string::npos
+                                        ? std::string::npos : slash - offset);
+    if (part.empty() || part == "." || part == "..")
+      return std::string();
+    if (offset == 0) root = resourceLower(part);
+    if (slash == std::string::npos) break;
+    offset = slash + 1;
+  }
+  if (root != "graphics" && root != "audio" && root != "fonts" &&
+      root != "movies" && root != "data")
+    return std::string();
+  return path;
+}
+
+bool FileSystem::findResource(const char *filename, std::string &virtualPath,
+                              bool fileOnly) {
+  virtualPath.clear();
+  const std::string requested = safeGameResourcePath(filename);
+  if (requested.empty()) return false;
+
+  PHYSFS_Stat stat;
+  const bool exactFound = PHYSFS_stat(requested.c_str(), &stat) &&
+      (!fileOnly || stat.filetype == PHYSFS_FILETYPE_REGULAR);
+  if (!p->havePathCache)
+    return exactFound ? (virtualPath = requested, true) : false;
+
+  const std::string lower = resourceLower(requested);
+  if (p->pathCache.contains(lower)) {
+    const std::string &actual = p->pathCache[lower];
+    if (PHYSFS_stat(actual.c_str(), &stat) &&
+        (!fileOnly || stat.filetype == PHYSFS_FILETYPE_REGULAR)) {
+      /* The cache uses the same ordered game/RTP virtual namespace as the
+       * normal Bitmap/Audio loader. If an exact-case spelling exists only
+       * in a LOWER priority RTP while the game has a differently cased
+       * file, the game's file must win; don't blindly prefer that exact
+       * spelling. Within one mount, exact-case files still win. */
+      if (exactFound) {
+        const char *requestedMount = PHYSFS_getRealDir(requested.c_str());
+        const std::string exactRoot = requestedMount ? requestedMount : "";
+        const char *cachedMount = PHYSFS_getRealDir(actual.c_str());
+        const std::string cacheRoot = cachedMount ? cachedMount : "";
+        if (!exactRoot.empty() && exactRoot == cacheRoot) {
+          virtualPath = requested;
+          return true;
+        }
+      }
+      virtualPath = actual;
+      return true;
+    }
+  }
+  if (exactFound) {
+    virtualPath = requested;
+    return true;
+  }
+  return false;
+}
+
+bool FileSystem::resourceExists(const char *filename, bool fileOnly) {
+  std::string virtualPath;
+  return findResource(filename, virtualPath, fileOnly);
+}
+
+bool FileSystem::resourceDirectory(const char *filename) {
+  std::string virtualPath;
+  if (!findResource(filename, virtualPath, false)) return false;
+  PHYSFS_Stat stat;
+  return PHYSFS_stat(virtualPath.c_str(), &stat) &&
+         stat.filetype == PHYSFS_FILETYPE_DIRECTORY;
+}
+
+static PHYSFS_EnumerateCallbackResult resourceEntriesEnum(void *opaque,
+                                                            const char *,
+                                                            const char *name) {
+  std::vector<std::string> &items = *static_cast<std::vector<std::string> *>(opaque);
+  if (std::find(items.begin(), items.end(), name) == items.end())
+    items.push_back(name);
+  return PHYSFS_ENUM_OK;
+}
+
+bool FileSystem::resourceEntries(const char *filename,
+                                 std::vector<std::string> &entries) {
+  entries.clear();
+  std::string virtualDir;
+  if (!findResource(filename, virtualDir, false)) return false;
+  PHYSFS_Stat stat;
+  if (!PHYSFS_stat(virtualDir.c_str(), &stat) ||
+      stat.filetype != PHYSFS_FILETYPE_DIRECTORY)
+    return false;
+
+  entries.push_back(".");
+  entries.push_back("..");
+  PHYSFS_enumerate(virtualDir.c_str(), resourceEntriesEnum, &entries);
+
+  /* The regular PhysFS enumerator can miss files in a lower-priority RTP
+   * directory whose parent differs ONLY by case from the game directory.
+   * fileLists is the unified lowercase mount index already used by the
+   * image/audio loader, so include its names as well. */
+  const std::string lowerDir = resourceLower(virtualDir);
+  if (p->havePathCache && p->fileLists.contains(lowerDir)) {
+    const std::vector<std::string> &files = p->fileLists[lowerDir];
+    for (size_t i = 0; i < files.size(); ++i) {
+      const std::string lowerFull = lowerDir + "/" + files[i];
+      if (!p->pathCache.contains(lowerFull)) continue;
+      const std::string &actual = p->pathCache[lowerFull];
+      const size_t slash = actual.find_last_of('/');
+      const std::string actualName = slash == std::string::npos
+                                     ? actual : actual.substr(slash + 1);
+      if (std::find(entries.begin(), entries.end(), actualName) == entries.end())
+        entries.push_back(actualName);
+    }
+  }
+  return true;
+}
+
+bool FileSystem::resourceDiskPath(const char *filename, std::string &diskPath,
+                                  bool directoryOnly) {
+  diskPath.clear();
+  std::string virtualPath;
+  if (!findResource(filename, virtualPath, !directoryOnly)) return false;
+
+  PHYSFS_Stat stat;
+  if (!PHYSFS_stat(virtualPath.c_str(), &stat) ||
+      (directoryOnly && stat.filetype != PHYSFS_FILETYPE_DIRECTORY))
+    return false;
+
+  /* PhysFS may find resources inside packed RGSS archives; File.open can
+   * only use disk files. Never hand out an archive's pseudo-path. */
+  const char *mount = PHYSFS_getRealDir(virtualPath.c_str());
+  if (!mount) return false;
+  const std::string mountRoot = normalize(mount, false, true);
+  const std::string physical = mountRoot + "/" + virtualPath;
+  struct stat physicalStat;
+  if (::stat(physical.c_str(), &physicalStat) != 0 ||
+      (directoryOnly ? !S_ISDIR(physicalStat.st_mode)
+                     : !S_ISREG(physicalStat.st_mode)))
+    return false;
+
+  /* Standard Ruby File.open receives real paths, unlike the virtual
+   * PhysFS stream reader. Refuse any intermediate symlink that escapes
+   * the owning mounted directory (such as Graphics/Pictures -> /etc). */
+  char *rootReal = realpath(mountRoot.c_str(), nullptr);
+  char *fileReal = realpath(physical.c_str(), nullptr);
+  if (!rootReal || !fileReal) {
+    free(rootReal);
+    free(fileReal);
+    return false;
+  }
+  std::string rootPrefix(rootReal);
+  const std::string canonicalFile(fileReal);
+  free(rootReal);
+  free(fileReal);
+  if (rootPrefix.empty() || rootPrefix.back() != '/') rootPrefix += '/';
+  if (canonicalFile.compare(0, rootPrefix.size(), rootPrefix) != 0)
+    return false;
+  diskPath = physical;
+  return true;
 }
 
 const char *FileSystem::desensitize(const char *filename) {
-  std::string fn_lower(filename);
-    
-  std::transform(fn_lower.begin(), fn_lower.end(), fn_lower.begin(), [](unsigned char c){
-      return std::tolower(c);
-  });
+  std::string fn_lower = resourceLower(normalize(filename, false, false));
   if (p->havePathCache && p->pathCache.contains(fn_lower))
     return p->pathCache[fn_lower].c_str();
   return filename;

@@ -82,8 +82,17 @@ struct SharedMidiState
 		flSettings = fluid.new_settings();
 		fluid.settings_setnum(flSettings, "synth.gain", 1.0f);
 		fluid.settings_setnum(flSettings, "synth.sample-rate", SYNTH_SAMPLERATE);
-		fluid.settings_setint(flSettings, "synth.chorus.active", conf.midi.chorus);
-		fluid.settings_setint(flSettings, "synth.reverb.active", conf.midi.reverb);
+		if (rpgmpFluidLiteActive)
+		{
+			/* JoiPlay's FluidLite uses string-valued boolean settings. */
+			fluid.settings_setstr(flSettings, "synth.chorus.active", conf.midi.chorus ? "yes" : "no");
+			fluid.settings_setstr(flSettings, "synth.reverb.active", conf.midi.reverb ? "yes" : "no");
+		}
+		else
+		{
+			fluid.settings_setint(flSettings, "synth.chorus.active", conf.midi.chorus);
+			fluid.settings_setint(flSettings, "synth.reverb.active", conf.midi.reverb);
+		}
 
 		for (size_t i = 0; i < SYNTH_INIT_COUNT; ++i)
 			addSynth(false);
@@ -116,6 +125,12 @@ struct SharedMidiState
 
 	void releaseSynth(fluid_synth_t *synth)
 	{
+		/* CC 120 is MIDI All Sound Off.  Unlike a Note Off / release
+		 * envelope, it clears sustained voices when a MIDI song ends.
+		 * The outgoing OpenAL source has already been stopped. */
+		for (int channel = 0; channel < 16; ++channel)
+			fluid.synth_cc(synth, channel, 120, 0);
+
 		size_t i;
 
 		for (i = 0; i < synths.size(); ++i)

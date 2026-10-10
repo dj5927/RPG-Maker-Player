@@ -52,7 +52,7 @@ constexpr double ASPECT_16_10_TOLERANCE = 0.07;
 constexpr Uint64 EXIT_COMBO_HOLD_MS = 300;
 constexpr Uint64 GAME_EXIT_COMBO_HOLD_MS = 1500;
 constexpr Uint64 GAME_KEYBOARD_COMBO_HOLD_MS = 50;
-constexpr const char* APP_VERSION = "1.3";
+constexpr const char* APP_VERSION = "1.6";
 const SDL_Color BG{16, 21, 29, 255};
 const SDL_Color WHITE{255, 255, 255, 255};
 const SDL_Color MUTED{170, 180, 194, 255};
@@ -3028,7 +3028,7 @@ std::vector<fs::path> localGameFontDirs(const GameInfo& game) {
 
 fs::path writePortableFontconfig(const fs::path& launcherRoot, const GameInfo& game,
                                  const std::string& profile) {
-  const fs::path shared = launcherRoot / "assets/fonts";
+  const fs::path shared = launcherRoot / "runtime/rtp/fonts";
   std::error_code ec;
   const auto gameDirs = localGameFontDirs(game);
   if (gameDirs.empty() && !fs::is_directory(shared, ec)) return {};
@@ -3089,10 +3089,30 @@ bool hardlinkOrCopyFont(const fs::path& source, const fs::path& destination, boo
 }
 
 void syncSharedFontsIntoDirectory(const fs::path& launcherRoot, const fs::path& destination) {
-  const fs::path shared = launcherRoot / "assets/fonts";
+  const fs::path shared = launcherRoot / "runtime/rtp/fonts";
   for (const auto& font : fontFilesInDirectory(shared)) {
     hardlinkOrCopyFont(font, destination / font.filename(), false);
   }
+}
+
+// V1.5 upgrade: never strand manually installed shared fonts in the old
+// assets/fonts location. Copy missing font files once, keep original intact.
+int migrateOldSharedFonts(const fs::path& launcherRoot) {
+  const fs::path legacy = launcherRoot / "assets/fonts";
+  const fs::path shared = launcherRoot / "runtime/rtp/fonts";
+  int migrated = 0;
+  for (const auto& font : fontFilesInDirectory(legacy)) {
+    const fs::path relative = font.lexically_relative(legacy);
+    if (relative.empty() || relative.string().find("..") != std::string::npos) continue;
+    const fs::path destination = shared / relative;
+    std::error_code ec;
+    if (fs::exists(destination, ec)) continue;
+    fs::create_directories(destination.parent_path(), ec);
+    ec.clear();
+    if (fs::copy_file(font, destination, fs::copy_options::skip_existing, ec) && !ec)
+      ++migrated;
+  }
+  return migrated;
 }
 std::string runtimeUiLabel(const GameInfo& game) {
   if (isEasyRpgEngine(game.engine)) return "EasyRPG 0.8.1.1";
@@ -3476,6 +3496,19 @@ int launchRgssGame(const fs::path& launcherRoot, const GameInfo& game, std::stri
       unsetenv("MKXP_PORTABLE_PRELOAD_DIR");
     }
 
+    const std::string sharedRtpRoot = fs::absolute(launcherRoot / "runtime/rtp").string();
+    setenv("MKXP_PORTABLE_RTP_ROOT", sharedRtpRoot.c_str(), 1);
+    const std::string rgssGameRoot = fs::absolute(game.path).string();
+    setenv("RPGMP_RGSS_GAME_ROOT", rgssGameRoot.c_str(), 1);
+    const char* rgssEngineName = game.engine == RgssEngine::XP ? "XP" :
+                                 game.engine == RgssEngine::VX ? "VX" :
+                                 game.engine == RgssEngine::VXAce ? "VXACE" : "";
+    setenv("RPGMP_RGSS_ENGINE", rgssEngineName, 1);
+    const std::string compatRegistry = fs::absolute(launcherRoot / "runtime/_compat/patches.json").string();
+    setenv("RPGMP_PATCH_DB", compatRegistry.c_str(), 1);
+    dprintf(STDERR_FILENO, "[RPGMP-RTP] root=%s engine=%s [RPGMP-COMPAT] registry=%s\n",
+            sharedRtpRoot.c_str(), rgssEngineName, compatRegistry.c_str());
+
     const fs::path portableSoundFont = launcherRoot / "assets/soundfonts/TimGM6mb.sf2";
     if (fs::is_regular_file(portableSoundFont)) {
       const std::string soundFontPath = fs::absolute(portableSoundFont).string();
@@ -3487,7 +3520,7 @@ int launchRgssGame(const fs::path& launcherRoot, const GameInfo& game, std::stri
     if (!portableFontConfig.empty()) {
       const std::string fontConfigPath = fs::absolute(portableFontConfig).string();
       const std::string fontConfigDir = fs::absolute(portableFontConfig.parent_path()).string();
-      const std::string globalFontDir = fs::absolute(launcherRoot / "assets/fonts").string();
+      const std::string globalFontDir = fs::absolute(launcherRoot / "runtime/rtp/fonts").string();
       setenv("FONTCONFIG_FILE", fontConfigPath.c_str(), 1);
       setenv("FONTCONFIG_PATH", fontConfigDir.c_str(), 1);
       setenv("MKXP_GLOBAL_FONT_DIR", globalFontDir.c_str(), 1);
@@ -3810,7 +3843,7 @@ std::vector<fs::path> syncWolfPrefixFonts(const fs::path& launcherRoot, const Ga
     }
   }
 
-  const fs::path shared = launcherRoot / "assets/fonts";
+  const fs::path shared = launcherRoot / "runtime/rtp/fonts";
   for (const auto& font : fontFilesInDirectory(shared, true)) {
     const fs::path target = windowsFonts / ("mkxp_global_" + font.filename().string());
     if (hardlinkOrCopyFont(font, target, true)) {
@@ -3978,7 +4011,7 @@ int launchWolfExecutable(const fs::path& launcherRoot, const GameInfo& game, boo
     if (!portableFontConfig.empty()) {
       const std::string fontConfigPath = fs::absolute(portableFontConfig).string();
       const std::string fontConfigDir = fs::absolute(portableFontConfig.parent_path()).string();
-      const std::string globalFontDir = fs::absolute(launcherRoot / "assets/fonts").string();
+      const std::string globalFontDir = fs::absolute(launcherRoot / "runtime/rtp/fonts").string();
       setenv("FONTCONFIG_FILE", fontConfigPath.c_str(), 1);
       setenv("FONTCONFIG_PATH", fontConfigDir.c_str(), 1);
       setenv("MKXP_GLOBAL_FONT_DIR", globalFontDir.c_str(), 1);
@@ -4105,7 +4138,7 @@ int launchProtonCompatibilityGame(const fs::path& launcherRoot, const GameInfo& 
     if (!portableFontConfig.empty()) {
       const std::string fontConfigPath = fs::absolute(portableFontConfig).string();
       const std::string fontConfigDir = fs::absolute(portableFontConfig.parent_path()).string();
-      const std::string globalFontDir = fs::absolute(launcherRoot / "assets/fonts").string();
+      const std::string globalFontDir = fs::absolute(launcherRoot / "runtime/rtp/fonts").string();
       setenv("FONTCONFIG_FILE", fontConfigPath.c_str(), 1);
       setenv("FONTCONFIG_PATH", fontConfigDir.c_str(), 1);
       setenv("MKXP_GLOBAL_FONT_DIR", globalFontDir.c_str(), 1);
@@ -4161,58 +4194,42 @@ SDL_GameController* openFirstController() {
   return nullptr;
 }
 
-// One content-fingerprint registry per selected library; never overwrite
-// custom patches.json when a folder is selected again.
-bool ensureLibraryCompatRegistry(const fs::path& library, std::string& detail) {
-  std::error_code ec;
-  if (!fs::is_directory(library, ec)) {
-    detail = "library is not a directory";
-    return false;
+// One user-editable registry per PLAYER installation, not per game library.
+// The Python helper merges only missing verified Android profiles and any
+// legacy library profiles, preserving custom/disabled entries and invalid
+// user-authored JSON without overwriting it.
+bool ensureRuntimeCompatRegistry(const fs::path& launcherRoot,
+                                 const fs::path& library, std::string& detail) {
+  const fs::path helper = launcherRoot / "runtime/_compat/merge_registry.py";
+  const fs::path registry = launcherRoot / "runtime/_compat/patches.json";
+  if (!fs::is_regular_file(helper)) {
+    detail = "missing runtime/_compat/merge_registry.py";
+    return fs::is_regular_file(registry);
   }
-  const fs::path dir = library / "_compat";
-  fs::create_directories(dir, ec);
-  if (ec) {
-    detail = "cannot create _compat: " + ec.message();
-    return false;
+#if defined(__linux__)
+  const pid_t child = fork();
+  if (child == 0) {
+    execlp("python3", "python3", helper.c_str(), "--player-root",
+           launcherRoot.c_str(), "--game-library", library.c_str(),
+           static_cast<char*>(nullptr));
+    _exit(127);
   }
-  const fs::path json = dir / "patches.json";
-  if (fs::exists(json, ec)) {
-    if (!fs::is_regular_file(json, ec)) {
-      detail = "patches.json is not a regular file";
-      return false;
-    }
-    detail = "preserved existing " + json.string();
-    return true;
+  if (child < 0) {
+    detail = "compat migration fork failed";
+    return fs::is_regular_file(registry);
   }
-  if (ec) {
-    detail = "cannot check patches.json: " + ec.message();
-    return false;
+  int childStatus = 0;
+  if (waitpid(child, &childStatus, 0) < 0 ||
+      !WIFEXITED(childStatus) || WEXITSTATUS(childStatus) != 0) {
+    detail = "compat registry merge failed; existing file preserved";
+    return fs::is_regular_file(registry);
   }
-  const fs::path staged = dir / "patches.json.mkxp-staging";
-  if (fs::exists(staged, ec)) {
-    detail = "staging file exists, not overwriting";
-    return false;
-  }
-  {
-    std::ofstream out(staged, std::ios::binary);
-    if (!out) {
-      detail = "cannot create central registry";
-      return false;
-    }
-    out << "{\n  \"schema\": 2,\n  \"enabled\": true,\n  \"games\": {}\n}\n";
-    out.flush();
-    if (!out.good()) {
-      detail = "cannot write central registry";
-      return false;
-    }
-  }
-  fs::rename(staged, json, ec);
-  if (ec) {
-    detail = "cannot publish central registry: " + ec.message();
-    return false;
-  }
-  detail = "created " + json.string();
-  return true;
+#else
+  detail = "compat registry initialization requires Linux";
+  return fs::is_regular_file(registry);
+#endif
+  detail = "runtime registry ready: " + registry.string();
+  return fs::is_regular_file(registry);
 }
 
 } // namespace
@@ -4224,6 +4241,15 @@ int main(int, char**) {
   fs::create_directories(root / "logs", ec);
   fs::create_directories(root / "config", ec);
   fs::create_directories(root / "cache", ec);
+  fs::create_directories(root / "runtime/rtp/xp", ec);
+  fs::create_directories(root / "runtime/rtp/vx", ec);
+  fs::create_directories(root / "runtime/rtp/vxace", ec);
+  fs::create_directories(root / "runtime/rtp/fonts", ec);
+  fs::create_directories(root / "runtime/_compat", ec);
+  const int legacyFontsMigrated = migrateOldSharedFonts(root);
+  if (legacyFontsMigrated > 0)
+    std::cerr << "[RPGMP-RTP] migrated existing fonts from assets/fonts: "
+              << legacyFontsMigrated << '\n';
 #if defined(__linux__)
   if (!std::getenv("MKXP_TEST_ALLOW_MULTIPLE_INSTANCES")) {
     const fs::path lockPath = root / "cache/launcher.instance.lock";
@@ -4287,16 +4313,16 @@ int main(int, char**) {
   std::ofstream log(root / "logs/MKXP_Launcher.log", std::ios::app);
   auto reloadGameRoot = [&]() {
     std::string registryDetail;
-    const bool registryReady = ensureLibraryCompatRegistry(gameRoot, registryDetail);
+    const bool registryReady = ensureRuntimeCompatRegistry(root, gameRoot, registryDetail);
 #if defined(__linux__)
     if (registryReady) {
-      const std::string selectedDb = (gameRoot / "_compat/patches.json").string();
-      setenv("RPGMP_PATCH_DB", selectedDb.c_str(), 1);
+      const std::string runtimeDb = (root / "runtime/_compat/patches.json").string();
+      setenv("RPGMP_PATCH_DB", runtimeDb.c_str(), 1);
     } else {
       unsetenv("RPGMP_PATCH_DB");
     }
 #endif
-    log << "central compatibility registry | path=" << gameRoot.string()
+    log << "central compatibility registry | path=" << (root / "runtime/_compat/patches.json").string()
         << " ready=" << (registryReady ? 1 : 0)
         << " detail=" << registryDetail << '\n';
     allGames = scanGames(gameRoot);

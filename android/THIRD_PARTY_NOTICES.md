@@ -28,5 +28,11 @@ The repository-level `LICENSE` applies to original RPG Maker Player code. Third-
 ## GeneralUser GS SoundFont
 The Android binary package may bundle GeneralUser GS for MIDI playback. The SoundFont is treated as a release/runtime asset rather than source and must be distributed with its original license/attribution terms.
 
+## FluidLite (Android MIDI)
+- Source: https://github.com/divideconcept/FluidLite
+- Reference commit: `4a01cf1c67419e71da971d209f2855bbf4f3bab8`
+- License: LGPL-2.1-or-later; see `app/src/main/assets/third_party/FluidLite.LICENSE.txt`
+
 ## Other runtime dependencies
+
 The APK/native runtimes also use libraries such as OpenAL, Ogg/Vorbis, FluidSynth, FreeType and Android system libraries. Their upstream licenses remain applicable. This project does not claim ownership of RPG Maker, EasyRPG, mkxp-z, Ruby, game assets or third-party runtime components.

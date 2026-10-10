@@ -324,6 +324,24 @@ try { exp } catch (...) {}
     fillStringVec(opts["preloadScript"], preloadScripts);
     fillStringVec(opts["postloadScript"], postloadScripts);
     fillStringVec(opts["RTP"], rtps);
+    // SteamOS shared RTP: preserve user-configured paths ahead of the
+    // install-wide fallback; game-local assets are mounted before RTPs.
+    if (const char *rtpRoot = SDL_getenv("MKXP_PORTABLE_RTP_ROOT")) {
+        if (*rtpRoot) {
+            std::string shared(rtpRoot);
+            while (shared.size() > 1 && shared.back() == '/') shared.pop_back();
+            const char *engine = rgssVersion == 1 ? "xp" :
+                                 rgssVersion == 2 ? "vx" :
+                                 rgssVersion == 3 ? "vxace" : nullptr;
+            if (engine) {
+                rtps.push_back(shared + "/" + engine);
+                rtps.push_back(shared);
+                Debug() << "[RPGMP-RTP] engine=" << engine
+                        << " fallback=" << (shared + "/" + engine)
+                        << " fonts=" << (shared + "/fonts");
+            }
+        }
+    }
     fillStringVec(opts["patches"], patches);
     fillStringVec(opts["fontSub"], fontSubs);
     for (std::string & fontSub : fontSubs)

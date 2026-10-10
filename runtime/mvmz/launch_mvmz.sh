@@ -94,12 +94,12 @@ fi
 mkdir -p "$WORK"
 export LD_LIBRARY_PATH="$COMPAT/lib:$NWROOT${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 unset LD_PRELOAD 2>/dev/null || true
-GLOBAL_FONTDIR="$ROOT/assets/fonts"
+GLOBAL_FONTDIR="$ROOT/runtime/rtp/fonts"
 export MKXP_GLOBAL_FONT_DIR="$GLOBAL_FONTDIR"
 
 # Old NW.js/Chromium builds can abort on minimal SteamOS environments when
 # Fontconfig cannot resolve a default family. Prefer the game's own fonts,
-# then the launcher's shared assets/fonts fallback, and finally the bundled
+# then the launcher's shared runtime/rtp/fonts fallback, and finally the bundled
 # MV/MZ compatibility font.
 FONTDIR="$COMPAT/fonts"
 GAME_FONTDIR="$WEBROOT/fonts"
@@ -184,7 +184,7 @@ EOF
 MOUNTED=0
 PATCHED_WEBROOT=""
 GAME_PATCH_MANIFEST=""
-CENTRAL_PATCH_DB="${RPGMP_PATCH_DB:-$ROOT/_compat/patches.json}"
+CENTRAL_PATCH_DB="${RPGMP_PATCH_DB:-$ROOT/runtime/_compat/patches.json}"
 if [ -f "$GAME/rpgmp-patches.json" ]; then
   GAME_PATCH_MANIFEST="$GAME/rpgmp-patches.json"
 elif [ -f "$WEBROOT/rpgmp-patches.json" ]; then

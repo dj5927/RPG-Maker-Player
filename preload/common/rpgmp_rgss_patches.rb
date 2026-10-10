@@ -128,7 +128,12 @@ module RPGMP_RgssPatches
   end
 
   def self.log(message)
-    STDOUT.puts('[RPGMP-RGSS-PATCH] ' + message.to_s)
+    line = '[RPGMP-RGSS-PATCH] ' + message.to_s
+    STDOUT.puts(line)
+    path = ENV['RPGMP_PATCH_LOG']
+    if path && !path.empty?
+      File.open(path, 'ab') {|f| f.write(line + "\n")}
+    end
   rescue Exception
   end
 
@@ -154,6 +159,15 @@ module RPGMP_RgssPatches
       return nil unless entry
       path = File.join(data_dir, entry)
     end
+    marker = basename.split('.')[0]
+    name = {'Scripts'=>'RPGMP_PATCH_SHA_SCRIPTS',
+            'System'=>'RPGMP_PATCH_SHA_SYSTEM'}[marker]
+    if name
+      portable_sha = ENV[name]
+      if portable_sha && portable_sha =~ /\A[0-9a-f]{64}\z/
+        return portable_sha
+      end
+    end
     begin
       require 'digest/sha2'
       digest = Digest::SHA256.new
@@ -163,8 +177,8 @@ module RPGMP_RgssPatches
         end
       end
       digest.hexdigest
-    rescue LoadError
-      log('SHA-256 unavailable, registry not applied')
+    rescue LoadError, NameError
+      log('SHA-256 extension unavailable and precomputed hash not set')
       nil
     end
   end
@@ -178,7 +192,7 @@ module RPGMP_RgssPatches
       # SteamOS preload resides under <player-root>/preload/common.
       # Android sets RPGMP_PATCH_DB from the selected mkxp library root.
       central = File.join(File.dirname(File.dirname(File.dirname(__FILE__))),
-                          '_compat', 'patches.json')
+                          'runtime', '_compat', 'patches.json')
     end
     if File.file?(central)
       raise 'central registry too large' if File.size(central) > MAX_BYTES
@@ -254,6 +268,8 @@ module RPGMP_RgssPatches
   end
 
   def self.engine_name
+    env_engine = ENV['RPGMP_RGSS_ENGINE']
+    return env_engine if ['XP', 'VX', 'VXACE'].include?(env_engine)
     v = if defined?(Preload) && Preload.respond_to?(:detect_rgss_version)
           Preload.detect_rgss_version
         else
@@ -271,6 +287,7 @@ module RPGMP_RgssPatches
 
   def self.apply
     return unless defined?($RGSS_SCRIPTS) && $RGSS_SCRIPTS.kind_of?(Array)
+    log('loader entered engine=' + engine_name.to_s + ' ruby=' + RUBY_VERSION)
     data = manifest_for_current_game
     return unless data
     raise 'patch data invalid' unless data.kind_of?(Hash)

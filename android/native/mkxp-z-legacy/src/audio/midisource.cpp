@@ -583,6 +583,8 @@ struct CCResetter
 
 struct MidiSource : ALDataSource, MidiReadHandler
 {
+	bool isMidi() const override { return true; }
+
 	const uint16_t freq;
 	fluid_synth_t *synth;
 
@@ -889,6 +891,39 @@ struct MidiSource : ALDataSource, MidiReadHandler
 	{
 		/* Reset synth */
 		fluid.synth_system_reset(synth);
+
+		/* A169: FluidSynth/FluidLite may still return cached samples from the
+		 * PREVIOUS song for a short time after system_reset(). These frames
+		 * are already synthesized but are not MIDI events. Silently discard
+		 * them BEFORE scheduling the new track's first MIDI event. This avoids
+		 * losing the new song's first note or blocking for wall-clock time.
+		 * Host tests with GeneralUser GS measured up to ~0.6s of old PCM on
+		 * FluidSynth, versus ~0.05s on FluidLite. Both are drained here. */
+		const int blockFrames = 512;
+		const int maxFrames = SYNTH_SAMPLERATE * 2;
+		const int64_t silenceEnergy = 4LL * 4LL * blockFrames * 2;
+		int16_t drained[blockFrames * 2];
+		int totalFrames = 0;
+		int quietBlocks = 0;
+		int peak = 0;
+		while (totalFrames < maxFrames && quietBlocks < 3)
+		{
+			fluid.synth_write_s16(synth, blockFrames, drained, 0, 2,
+							 drained, 1, 2);
+			int64_t energy = 0;
+			for (int i = 0; i < blockFrames * 2; ++i)
+			{
+				int v = drained[i];
+				energy += static_cast<int64_t>(v) * v;
+				int absV = v < 0 ? -v : v;
+				peak = std::max(peak, absV);
+			}
+			quietBlocks = energy <= silenceEnergy ? quietBlocks + 1 : 0;
+			totalFrames += blockFrames;
+		}
+		Debug() << "[RPGMP MIDI A169] reset-tail-flush frames="
+		        << totalFrames << "peak=" << peak
+		        << "quiet=" << (quietBlocks >= 3);
 
 		/* Reset runtime variables */
 		genDeltasCarry = 0;

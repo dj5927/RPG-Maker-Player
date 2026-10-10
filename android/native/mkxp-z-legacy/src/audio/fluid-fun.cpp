@@ -6,7 +6,9 @@
 
 #include "debugwriter.h"
 
-#if __LINUX__ || __ANDROID__
+#if __ANDROID__
+#define FLUID_LIB "libfluidlite.so"
+#elif __LINUX__
 #define FLUID_LIB "libfluidsynth.so.3"
 #elif MKXPZ_BUILD_XCODE
 #define FLUID_LIB "@rpath/libfluidsynth.dylib"
@@ -19,6 +21,7 @@
 #endif
 
 struct FluidFunctions fluid;
+bool rpgmpFluidLiteActive = false;
 #ifndef SHARED_FLUID
 static void *so;
 #endif
@@ -35,6 +38,14 @@ void initFluidFunctions()
 
 #else
 	so = SDL_LoadObject(FLUID_LIB);
+#if __ANDROID__
+	rpgmpFluidLiteActive = (so != 0);
+	if (!so)
+	{
+		Debug() << "[RPGMP MIDI A169] FluidLite load failed; trying original FluidSynth";
+		so = SDL_LoadObject("libfluidsynth.so");
+	}
+#endif
 
 	if (!so)
 		goto fail;
@@ -52,6 +63,11 @@ void initFluidFunctions()
 
 FLUID_FUNCS
 FLUID_FUNCS2
+
+#if __ANDROID__
+	Debug() << "[RPGMP MIDI A169] backend="
+	        << (rpgmpFluidLiteActive ? "FluidLite" : "FluidSynth-fallback");
+#endif
 
 	return;
 

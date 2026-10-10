@@ -142,6 +142,12 @@ RB_METHOD(mkxpReloadPathCache);
 RB_METHOD(mkxpAddPath);
 RB_METHOD(mkxpRemovePath);
 RB_METHOD(mkxpFileExists);
+RB_METHOD(mkxpRpgmpResourceExists);
+RB_METHOD(mkxpRpgmpResourceFile);
+RB_METHOD(mkxpRpgmpResourceDirectory);
+RB_METHOD(mkxpRpgmpResourceEntries);
+RB_METHOD(mkxpRpgmpResourceDiskPath);
+RB_METHOD(mkxpRpgmpResourceDiskDirectory);
 RB_METHOD(mkxpLaunch);
 
 RB_METHOD(mkxpGetJSONSetting);
@@ -255,6 +261,12 @@ static void mriBindingInit() {
     _rb_define_module_function(mod, "mount", mkxpAddPath);
     _rb_define_module_function(mod, "unmount", mkxpRemovePath);
     _rb_define_module_function(mod, "file_exist?", mkxpFileExists);
+    _rb_define_module_function(mod, "rpgmp_resource_exists?", mkxpRpgmpResourceExists);
+    _rb_define_module_function(mod, "rpgmp_resource_file?", mkxpRpgmpResourceFile);
+    _rb_define_module_function(mod, "rpgmp_resource_directory?", mkxpRpgmpResourceDirectory);
+    _rb_define_module_function(mod, "rpgmp_resource_entries", mkxpRpgmpResourceEntries);
+    _rb_define_module_function(mod, "rpgmp_resource_disk_path", mkxpRpgmpResourceDiskPath);
+    _rb_define_module_function(mod, "rpgmp_resource_disk_directory", mkxpRpgmpResourceDiskDirectory);
     _rb_define_module_function(mod, "launch", mkxpLaunch);
     
     _rb_define_module_function(mod, "default_font_family=", mkxpSetDefaultFontFamily);
@@ -618,11 +630,71 @@ RB_METHOD(mkxpSetDefaultFontFamily) {
     VALUE familyV;
     rb_scan_args(argc, argv, "1", &familyV);
     SafeStringValue(familyV);
-    
+
     std::string family(RSTRING_PTR(familyV));
     shState->fontState().setDefaultFontFamily(family);
-    
+
     return Qnil;
+}
+
+RB_METHOD(mkxpRpgmpResourceExists) {
+    RB_UNUSED_PARAM;
+    VALUE path;
+    rb_scan_args(argc, argv, "1", &path);
+    SafeStringValue(path);
+    return shState->fileSystem().resourceExists(RSTRING_PTR(path)) ? Qtrue : Qfalse;
+}
+
+RB_METHOD(mkxpRpgmpResourceFile) {
+    RB_UNUSED_PARAM;
+    VALUE path;
+    rb_scan_args(argc, argv, "1", &path);
+    SafeStringValue(path);
+    return shState->fileSystem().resourceExists(RSTRING_PTR(path), true) ? Qtrue : Qfalse;
+}
+
+RB_METHOD(mkxpRpgmpResourceDiskPath) {
+    RB_UNUSED_PARAM;
+    VALUE path;
+    rb_scan_args(argc, argv, "1", &path);
+    SafeStringValue(path);
+    std::string resolved;
+    if (!shState->fileSystem().resourceDiskPath(RSTRING_PTR(path), resolved))
+        return Qnil;
+    return rb_utf8_str_new_cstr(resolved.c_str());
+}
+
+RB_METHOD(mkxpRpgmpResourceDirectory) {
+    RB_UNUSED_PARAM;
+    VALUE path;
+    rb_scan_args(argc, argv, "1", &path);
+    SafeStringValue(path);
+    return shState->fileSystem().resourceDirectory(RSTRING_PTR(path)) ? Qtrue : Qfalse;
+}
+
+RB_METHOD(mkxpRpgmpResourceEntries) {
+    RB_UNUSED_PARAM;
+    VALUE path;
+    rb_scan_args(argc, argv, "1", &path);
+    SafeStringValue(path);
+    std::vector<std::string> entries;
+    if (!shState->fileSystem().resourceEntries(RSTRING_PTR(path), entries))
+        return Qnil;
+    VALUE result = rb_ary_new();
+    for (size_t i = 0; i < entries.size(); ++i)
+        rb_ary_push(result, rb_utf8_str_new_cstr(entries[i].c_str()));
+    return result;
+}
+
+RB_METHOD(mkxpRpgmpResourceDiskDirectory) {
+    RB_UNUSED_PARAM;
+    VALUE path;
+    rb_scan_args(argc, argv, "1", &path);
+    SafeStringValue(path);
+    std::string resolved;
+    if (!shState->fileSystem().resourceDiskPath(RSTRING_PTR(path), resolved, true))
+        return Qnil;
+    return rb_utf8_str_new_cstr(resolved.c_str());
 }
 
 RB_METHOD_GUARD(mkxpStringToUTF8) {
@@ -1044,6 +1116,7 @@ static void runRMXPScripts(BacktraceData &btData) {
             "ruby_classic_wrap.rb",
             "mkxp_wrap.rb",
             "win32_wrap.rb",
+            "rpgmp_resource_casefold.rb",
             "cicpoffs_compat.rb",
             "fix_volume.rb",
         };

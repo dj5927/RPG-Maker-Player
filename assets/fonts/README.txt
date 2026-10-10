@@ -1,6 +1,10 @@
-MKXP Launcher shared game-font fallback folder
+MKXP Launcher legacy shared font folder (automatic migration source)
 
-Place fallback fonts here. Game-local fonts always have priority.
+SteamOS v1.5 uses runtime/rtp/fonts as the single shared fallback folder.
+Place NEW fallback fonts under runtime/rtp/fonts, NOT here.
+Any existing user-added font files found here are copied to the new folder
+at launcher startup without overwriting existing new-folder fonts or
+deleting the originals. Game-local fonts always take priority.
 
 Used by:
 - RPG Maker XP / VX / VX Ace (Fontconfig fallback)

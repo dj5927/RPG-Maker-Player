@@ -67,6 +67,7 @@ struct FluidFunctions
 #define HAVE_FLUID fluid.new_synth
 
 extern FluidFunctions fluid;
+extern bool rpgmpFluidLiteActive;
 
 void initFluidFunctions();
 

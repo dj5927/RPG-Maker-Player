@@ -512,6 +512,19 @@ public final class MkxpPlayerActivity extends SDLActivity {
         File sharedRtpRoot = sharedRtpPath == null || sharedRtpPath.isEmpty()
                 ? null : new File(sharedRtpPath);
         List<File> fallbackRoots = RgssRtpFallback.searchRootsFromRtpRoot(sharedRtpRoot, engine);
+        boolean hasRtpBgm = false;
+        for (File fallbackRoot : fallbackRoots) {
+            File candidate = new File(fallbackRoot, "Audio/BGM");
+            if (candidate.isDirectory()) {
+                File[] tracks = candidate.listFiles();
+                if (tracks != null && tracks.length > 0) hasRtpBgm = true;
+            }
+        }
+        GameLog.append(gameLogPath, "RTP",
+                "engine=" + engine + " sharedRoot=" +
+                        (sharedRtpRoot == null ? "none" : sharedRtpRoot.getAbsolutePath()) +
+                        " fallbackRoots=" + fallbackRoots.size() +
+                        " rtpBgmAvailable=" + hasRtpBgm);
         for (File fallback : fallbackRoots) rtp.put(fallback.getAbsolutePath());
         root.put("RTP", rtp);
 
