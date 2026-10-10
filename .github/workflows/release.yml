@@ -1,9 +1,9 @@
-name: Release
+name: Legacy SteamOS 1.3 Release
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'v1.3'
 
 permissions:
   contents: write
