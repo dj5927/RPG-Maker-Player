@@ -74,15 +74,23 @@ def ensure_draft(token, notes, commit):
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
-        result = http_json(token, "POST", API + "/releases", {
-            "tag_name": TAG,
-            "target_commitish": commit,
-            "name": "RPG Maker Player SteamOS 1.7",
-            "body": notes,
-            "draft": True,
-            "prerelease": False,
-            "generate_release_notes": False,
-        })
+        # GitHub's release-by-tag endpoint can return 404 for an existing
+        # *draft* release. Resume the exact previously verified v1.7 draft
+        # instead of attempting to create a duplicate release.
+        try:
+            result = http_json(token, "GET", API + "/releases/454486967")
+        except urllib.error.HTTPError as missing:
+            if missing.code != 404:
+                raise
+            result = http_json(token, "POST", API + "/releases", {
+                "tag_name": TAG,
+                "target_commitish": commit,
+                "name": "RPG Maker Player SteamOS 1.7",
+                "body": notes,
+                "draft": True,
+                "prerelease": False,
+                "generate_release_notes": False,
+            })
     assert result["tag_name"] == TAG, result.get("tag_name")
     if not result["draft"]:
         raise RuntimeError("release already public; refusing to modify assets")
