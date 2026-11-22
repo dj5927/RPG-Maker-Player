@@ -1,4 +1,7 @@
-"""Build SteamOS 1.7 full package and cumulative 1.6 -> 1.7 OTA.
+"""Build SteamOS 1.7 full package and initial 1.6 -> 1.7 delta.
+
+For the *public* v1.7 OTA, run rebuild_steamos_v17_cumulative_ota.py
+afterward to include every change since v1.3 (earliest updater version).
 
 Base release bytes are immutable. New and replaced files are collected only
 from the isolated v1.7 stage, never from the user's installed game library.

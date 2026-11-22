@@ -13,7 +13,8 @@
 - Added the November 2026 EasyRPG Player development build, retaining 0.8.1.1 as a legacy fallback (`mkxp-easyrpg.txt`: `legacy`).
 - Added NW.js v0.120.0 alongside v0.117.0 and v0.29.0.
 - Updated MV/MZ root-file compatibility for plugins using `readFileSync`.
-- The v1.7 OTA preserves user game/save data, personal settings, and custom patch registries.
+- The cumulative v1.7 OTA supports existing v1.3 through v1.6 installs and
+  preserves user game/save data, personal settings, and custom patch registries.
 
 Fresh install: [SteamOS v1.7 release](https://github.com/dj5927/RPG-Maker-Player/releases/tag/v1.7). Existing installs: use **Settings → Update → Check for updates**.
 

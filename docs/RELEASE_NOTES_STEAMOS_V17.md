@@ -18,7 +18,8 @@
 
 ## Updates and preservation
 - SteamOS built-in Settings > Update recognizes this version as v1.7.
-- Full package is for fresh installations; OTA applies over v1.6.
+- Full package is for fresh installations; the cumulative OTA supports
+  existing SteamOS v1.3, v1.4, v1.5, v1.6 installations.
 - SHA256 sidecar accompanies the OTA tar.gz.
 - Game data, saved games, selected library, custom settings, fonts and
   runtime/_compat user patch database are not replaced by the OTA.

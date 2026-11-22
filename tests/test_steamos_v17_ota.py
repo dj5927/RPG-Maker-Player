@@ -1,8 +1,9 @@
-"""Validate v1.6 -> v1.7 OTA on an isolated Linux filesystem fixture."""
+"""Validate cumulative v1.3+ -> v1.7 OTA on isolated Linux fixtures."""
 from pathlib import Path
 import hashlib
 import os
 import subprocess
+import sys
 import tempfile
 
 PROJECT = Path("/mnt/d/GPT/MKXP")
@@ -18,6 +19,8 @@ def sha(file):
 
 
 def main():
+    current = sys.argv[1] if len(sys.argv) > 1 else "1.3"
+    assert current in ("1.3", "1.4", "1.5", "1.5.1", "1.5.2", "1.6")
     asset = DIST / NAME
     sidecar = DIST / (NAME + ".sha256")
     assert asset.is_file() and sidecar.is_file()
@@ -43,11 +46,11 @@ def main():
             target = root / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
-        (root / "VERSION").write_text("1.6\n")
+        (root / "VERSION").write_text(current + "\n")
         out = base / "ota.status"
         env = os.environ.copy()
         env["RPGMP_UPDATE_RELEASE_ROOT"] = release.parent.as_uri()
-        command = ["bash", str(SCRIPT), "install", str(root), "1.6", "1.7", str(out)]
+        command = ["bash", str(SCRIPT), "install", str(root), current, "1.7", str(out)]
         proc = subprocess.run(command, env=env, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True, timeout=300)
         assert proc.returncode == 0, "OTA installer failed\n" + proc.stdout[-3000:]
@@ -70,7 +73,7 @@ def main():
             assert sha(installed) == sha(staged), f"installed hash mismatch {name}"
         print("OTA_INSTALL_V17_VALIDATED_USER_SETTINGS_SAVES_COMPAT_FONTS", flush=True)
         print("OTA_INSTALLED_MKXP_RUBY18_RUBY19_RUBY31_EASYRPG_NWJS_0120", flush=True)
-        print("OTA_TEST_PASS", flush=True)
+        print("OTA_TEST_PASS_FROM", current, flush=True)
 
 
 if __name__ == "__main__":
