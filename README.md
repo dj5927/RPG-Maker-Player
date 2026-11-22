@@ -6,6 +6,17 @@
 
 **RPG Maker Player** is a SteamOS-focused all-in-one launcher for RPG Maker and WOLF RPG Editor games. It scans one game library folder, detects the engine/runtime, and launches games through the appropriate compatibility layer.
 
+## What's new in v1.7
+
+- Fixed intermittent Steam menu Stop/Exit hangs with coordinated launcher/game-process cleanup.
+- Rebuilt all three Linux mkxp-z Ruby runtimes with upstream graphics and charset fixes.
+- Added the November 2026 EasyRPG Player development build, retaining 0.8.1.1 as a legacy fallback (`mkxp-easyrpg.txt`: `legacy`).
+- Added NW.js v0.120.0 alongside v0.117.0 and v0.29.0.
+- Updated MV/MZ root-file compatibility for plugins using `readFileSync`.
+- The v1.7 OTA preserves user game/save data, personal settings, and custom patch registries.
+
+Fresh install: [SteamOS v1.7 release](https://github.com/dj5927/RPG-Maker-Player/releases/tag/v1.7). Existing installs: use **Settings → Update → Check for updates**.
+
 ## What's new in v1.4
 
 - Selecting or changing the game library automatically prepares

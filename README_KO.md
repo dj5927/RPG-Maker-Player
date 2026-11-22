@@ -6,6 +6,18 @@
 
 **RPG Maker Player**는 SteamOS용 RPG Maker / WOLF RPG Editor 올인원 런처입니다. 하나의 게임 루트를 스캔해 엔진과 필요한 런타임을 판별하고 각 게임에 맞는 실행 방식을 자동으로 선택합니다.
 
+## v1.7 업데이트 (2026-11-22)
+
+- Steam 메뉴 **종료하기**가 런처/실행 게임을 종료하지 못하던 간헐적 문제를 개선했습니다.
+- mkxp-z Ruby 1.8 / 1.9 / 3.1 엔진을 다시 빌드해 최신 Bitmap 복제·스프라이트 확대·인코딩 처리를 반영했습니다.
+- EasyRPG 최신 개발판을 SDL2 기반으로 추가하고 기존 0.8.1.1을 보조 엔진으로 유지합니다. 필요하면 게임 폴더의 `mkxp-easyrpg.txt`에 `legacy`를 입력하세요.
+- NW.js v0.120.0을 추가하고 기존 v0.117.0 / v0.29.0 선택도 유지합니다.
+- MV/MZ 플러그인의 `readFileSync` 루트 파일 참조 호환 패치를 추가했습니다.
+- 기존 게임·저장파일·설정·사용자 패치 DB는 OTA에서 덮어쓰지 않습니다.
+- 최신 버전 확인은 기존과 같이 설정에서 **수동으로만** 실행됩니다.
+
+신규 설치: [SteamOS v1.7 전체판](https://github.com/dj5927/RPG-Maker-Player/releases/tag/v1.7). 기존 설치: 런처 **설정 → 업데이트 → 업데이트 확인**.
+
 ## v1.3 업데이트
 
 - 설정의 **게임 폴더 아래에 `업데이트` 항목**을 추가했습니다. 현재 버전을 표시하고 사용자가 **업데이트 확인**을 눌렀을 때만 GitHub를 확인합니다. 런처 실행 시 자동 확인은 하지 않습니다.
@@ -51,7 +63,7 @@ Steam/데스크톱/시스템 로케일 정보를 이용해 언어를 감지합�
 
 ## SteamOS 설치 방법
 
-1. v1.3 Release에서 **`RPG_Maker_Player_SteamOS_V1.3.tar.gz`**를 다운로드합니다.
+1. v1.7 Release에서 **`RPG_Maker_Player_SteamOS_V1.7.tar.gz`**를 다운로드합니다.
 2. 압축을 풉니다. Windows에서 압축을 풀어도 됩니다.
 3. 압축 해제된 **`rpg maker player`** 폴더를 SteamOS 기기로 복사합니다.
 4. SteamOS **Desktop Mode**로 들어갑니다.

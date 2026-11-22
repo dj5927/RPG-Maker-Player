@@ -54,7 +54,7 @@ constexpr double ASPECT_16_10_TOLERANCE = 0.07;
 constexpr Uint64 EXIT_COMBO_HOLD_MS = 300;
 constexpr Uint64 GAME_EXIT_COMBO_HOLD_MS = 1500;
 constexpr Uint64 GAME_KEYBOARD_COMBO_HOLD_MS = 50;
-constexpr const char* APP_VERSION = "1.6";
+constexpr const char* APP_VERSION = "1.7";
 const SDL_Color BG{16, 21, 29, 255};
 const SDL_Color WHITE{255, 255, 255, 255};
 const SDL_Color MUTED{170, 180, 194, 255};
@@ -3155,7 +3155,7 @@ int migrateOldSharedFonts(const fs::path& launcherRoot) {
   return migrated;
 }
 std::string runtimeUiLabel(const GameInfo& game) {
-  if (isEasyRpgEngine(game.engine)) return "EasyRPG 0.8.1.1";
+  if (isEasyRpgEngine(game.engine)) return "EasyRPG (latest / legacy)";
   if (isWolfRpgEngine(game.engine)) return wolfProtonLabel(game);
   if (supportsProtonCompatibility(game) && protonCompatibilityEnabled(game))
     return std::string("Proton ") + gameProtonLabel(game);
@@ -3342,7 +3342,20 @@ int launchEasyRpgGame(const fs::path& launcherRoot, const GameInfo& game, std::s
                       SDL_Window* window, SDL_Renderer* renderer, const FontSet& fonts,
                       SDL_GameController* controller) {
 #if defined(__linux__)
-  const fs::path player = launcherRoot / "runtime/easyrpg/easyrpg-player";
+  const fs::path legacyPlayer = launcherRoot / "runtime/easyrpg/easyrpg-player";
+  const fs::path latestPlayer = launcherRoot / "runtime/easyrpg/easyrpg-player-v17";
+  std::string selectedMode = "latest";
+  {
+    std::ifstream modeFile(game.path / "mkxp-easyrpg.txt", std::ios::binary);
+    if (modeFile) {
+      std::getline(modeFile, selectedMode);
+      selectedMode = lowerAsciiCopy(selectedMode);
+      while (!selectedMode.empty() && std::isspace(static_cast<unsigned char>(selectedMode.back())))
+        selectedMode.pop_back();
+    }
+  }
+  const bool useLatest = selectedMode != "legacy" && fs::is_regular_file(latestPlayer);
+  const fs::path player = useLatest ? latestPlayer : legacyPlayer;
   if (!fs::is_regular_file(player)) {
     status = uiWord("EasyRPG Player 실행 파일이 없습니다.", "EasyRPG Player is missing.", "EasyRPG Player が見つかりません。");
     return -1;
@@ -3392,14 +3405,23 @@ int launchEasyRpgGame(const fs::path& launcherRoot, const GameInfo& game, std::s
   if (pid == 0) {
     prepareGameChildProcess();
     applyGameLocaleEnvironment(game);
+    if (useLatest) {
+      // Keep updated EasyRPG libraries private so bundled Ruby/mkxp-z
+      // and the parent SDL launcher never see incompatible versions.
+      const std::string privateLib = (launcherRoot / "runtime/easyrpg/lib").string();
+      const char* currentLib = std::getenv("LD_LIBRARY_PATH");
+      const std::string value = privateLib + (currentLib && *currentLib ? ":" + std::string(currentLib) : "");
+      setenv("LD_LIBRARY_PATH", value.c_str(), 1);
+    }
     const fs::path gameLogPath = launcherRoot / "logs" /
         ("game_" + game.folderName + "_easyrpg.log");
     const int gameLogFd = open(gameLogPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (gameLogFd >= 0) {
       dup2(gameLogFd, STDOUT_FILENO);
       dup2(gameLogFd, STDERR_FILENO);
-      dprintf(gameLogFd, "launcher game=%s engine=%s easyrpg=0.8.1.1 project=%s encoding=%s soundfont=%s font1=%s font2=%s compat_mirror=%d aliases=%zu\n",
+      dprintf(gameLogFd, "launcher game=%s engine=%s easyrpg=%s project=%s encoding=%s soundfont=%s font1=%s font2=%s compat_mirror=%d aliases=%zu\n",
               game.folderName.c_str(), engineLabel(game.engine).c_str(),
+              useLatest ? "git@6d32a6c" : "legacy-0.8.1.1",
               projectPath.c_str(), easyEncoding.c_str(), soundfont.c_str(), font1.c_str(), font2.c_str(),
               compatProject.mirrored ? 1 : 0, compatProject.aliasCount);
       close(gameLogFd);
@@ -3444,6 +3466,12 @@ int launchEasyRpgGame(const fs::path& launcherRoot, const GameInfo& game, std::s
     for (auto& arg : args) argv.push_back(arg.data());
     argv.push_back(nullptr);
     execv(player.c_str(), argv.data());
+    if (useLatest && fs::is_regular_file(legacyPlayer)) {
+      dprintf(STDERR_FILENO, "[RPGMP] EasyRPG latest exec failed (errno=%d); trying legacy\n", errno);
+      args[0] = legacyPlayer.string();
+      argv[0] = args[0].data();
+      execv(legacyPlayer.c_str(), argv.data());
+    }
     _exit(127);
   }
   if (pid < 0) {
@@ -4443,7 +4471,7 @@ int main(int, char**) {
   };
 
   if (!folderSelectionRequired) reloadGameRoot();
-  log << "launcher start | build=V161-STEAM-EXIT-RC1 root=" << root.string()
+  log << "launcher start | build=V170-STEAMOS-UPSTREAM root=" << root.string()
       << " gameRoot=" << (folderSelectionRequired ? std::string("<select-required>") : gameRoot.string())
       << " config=" << configDiagnostic << " uiLanguage=" << uiLanguageCode(gUiLanguage) << '\n';
   log.flush();

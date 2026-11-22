@@ -304,7 +304,7 @@ fi
 
 # Some plugins enumerate files from process.cwd() instead of the web root.
 # Mirror the upstream launcher's compatibility behavior with harmless symlinks.
-if [ -d "$WEBROOT/js/plugins" ] && grep -RqsE 'readdirSync|accessSync' "$WEBROOT/js/plugins" 2>/dev/null; then
+if [ -d "$WEBROOT/js/plugins" ] && grep -RqsE 'readdirSync|accessSync|readFileSync' "$WEBROOT/js/plugins" 2>/dev/null; then
   for ITEM in "$GAME"/*; do
     [ -e "$ITEM" ] || continue
     BASE="$(basename "$ITEM")"
