@@ -38,6 +38,10 @@ static std::string convertString(std::string &str, const char *charset) {
     }
     
     iconv_t cd = iconv_open("UTF-8", charset);
+    // Unknown/unsupported encoding must not pass an invalid descriptor to
+    // iconv(); keep the original bytes for the caller's fallback path.
+    if (cd == (iconv_t)-1)
+        return std::string(str);
     
     size_t inLen = str.size();
     size_t outLen = inLen * 4;

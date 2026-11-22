@@ -85,28 +85,8 @@ if [ "${MKXP_DIAG:-0}" = "1" ] && command -v ldd >/dev/null 2>&1; then
 fi
 
 echo "--- launching MKXP_Launcher ---"
-LAUNCHER_PID=""
-cleanup_launcher_tree() {
-  if [ -n "$LAUNCHER_PID" ] && kill -0 "$LAUNCHER_PID" 2>/dev/null; then
-    kill -TERM -- "-$LAUNCHER_PID" 2>/dev/null || kill -TERM "$LAUNCHER_PID" 2>/dev/null || true
-    sleep 0.2
-    kill -KILL -- "-$LAUNCHER_PID" 2>/dev/null || true
-  fi
-}
-trap 'cleanup_launcher_tree; exit 143' TERM INT HUP
 
-if command -v setsid >/dev/null 2>&1; then
-  setsid "$LAUNCHER" &
-else
-  "$LAUNCHER" &
-fi
-LAUNCHER_PID=$!
-wait "$LAUNCHER_PID"
-RC=$?
-LAUNCHER_PID=""
-trap - TERM INT HUP
-echo "MKXP_Launcher exit=$RC"
-if [ "$RC" -ne 0 ]; then
-  show_error "MKXP Launcher가 오류 코드 $RC 로 종료되었습니다.\n자세한 내용: logs/run.log"
-fi
-exit "$RC"
+# Keep the launched application as Steam's directly supervised PID instead of
+# detaching it via setsid + a background shell.  Its C++ SIGTERM handler
+# closes the active child process group before the frontend shuts down.
+exec "$LAUNCHER"
