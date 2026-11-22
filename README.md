@@ -6,6 +6,16 @@
 
 **RPG Maker Player** is a SteamOS-focused all-in-one launcher for RPG Maker and WOLF RPG Editor games. It scans one game library folder, detects the engine/runtime, and launches games through the appropriate compatibility layer.
 
+## v1.7.1 UI/OTA fix (2026-11-23)
+
+- Centered the Yes/No update confirmation modal and fixed buttons overflowing the original settings box.
+- Added a live OTA progress bar and percentage for download, checksum verification, extraction and installation.
+- Displays downloaded and total MB; keeps the UI responsive while the updater runs.
+- Installs files using per-file temporary copies and atomic renames, with archive traversal and user-data protection.
+- Provides a cumulative OTA for v1.3+ installations. The first upgrade from a pre-v1.7.1 build necessarily uses that older build's updater UI.
+
+Fresh install: [SteamOS v1.7.1 release](https://github.com/dj5927/RPG-Maker-Player/releases/tag/v1.7.1). Existing installs: use **Settings → Update → Check for updates**.
+
 ## What's new in v1.7
 
 - Fixed intermittent Steam menu Stop/Exit hangs with coordinated launcher/game-process cleanup.

@@ -4,6 +4,7 @@
 #include "launcher_config.hpp"
 #include "ruby_detector.hpp"
 #include "steam_mouse_bridge.hpp"
+#include "update_ui_layout.hpp"
 #include "ui_sound.hpp"
 
 #include <SDL.h>
@@ -54,7 +55,7 @@ constexpr double ASPECT_16_10_TOLERANCE = 0.07;
 constexpr Uint64 EXIT_COMBO_HOLD_MS = 300;
 constexpr Uint64 GAME_EXIT_COMBO_HOLD_MS = 1500;
 constexpr Uint64 GAME_KEYBOARD_COMBO_HOLD_MS = 50;
-constexpr const char* APP_VERSION = "1.7";
+constexpr const char* APP_VERSION = "1.7.1";
 const SDL_Color BG{16, 21, 29, 255};
 const SDL_Color WHITE{255, 255, 255, 255};
 const SDL_Color MUTED{170, 180, 194, 255};
@@ -933,10 +934,18 @@ struct UiShellState {
 struct UpdateUiState {
   std::string latestVersion;
   std::string message;
+  std::string installStage;
+  std::uint64_t downloadedBytes = 0;
+  std::uint64_t downloadTotal = 0;
+  int installPercent = 0;
+  int installPid = -1;
   bool checked = false;
   bool available = false;
   bool prompt = false;
   bool promptYes = true;
+  bool installing = false;
+  bool installed = false;
+  bool pointerConfirmed = false;
 };
 
 struct PlayHistoryEntry {
@@ -3781,12 +3790,88 @@ struct UpdateHelperResult {
   std::string error;
 };
 
+struct UpdateProgressSnapshot {
+  std::string stage;
+  int percent = 0;
+  std::uint64_t downloadedBytes = 0;
+  std::uint64_t downloadTotal = 0;
+};
+
+fs::path updateStatusFile(const fs::path& root) {
+  return root / "cache/update/launcher_update_status.txt";
+}
+
+fs::path updateProgressFile(const fs::path& root) {
+  return root / "cache/update/launcher_update_status.txt.progress";
+}
+
+UpdateHelperResult readUpdateHelperResult(const fs::path& root) {
+  UpdateHelperResult result;
+  std::ifstream in(updateStatusFile(root), std::ios::binary);
+  std::string line;
+  while (std::getline(in, line)) {
+    const auto pos = line.find('=');
+    if (pos == std::string::npos) continue;
+    const std::string key = line.substr(0, pos);
+    const std::string value = line.substr(pos + 1);
+    if (key == "STATUS") result.status = value;
+    else if (key == "LATEST") result.latest = value;
+    else if (key == "ERROR") result.error = value;
+  }
+  return result;
+}
+
+UpdateProgressSnapshot readUpdateProgress(const fs::path& root) {
+  UpdateProgressSnapshot result;
+  std::ifstream in(updateProgressFile(root), std::ios::binary);
+  std::string line;
+  while (std::getline(in, line)) {
+    const auto pos = line.find('=');
+    if (pos == std::string::npos) continue;
+    const std::string key = line.substr(0, pos);
+    const std::string value = line.substr(pos + 1);
+    try {
+      if (key == "STAGE") result.stage = value;
+      else if (key == "PERCENT") result.percent = std::clamp(std::stoi(value), 0, 100);
+      else if (key == "BYTES") result.downloadedBytes = std::stoull(value);
+      else if (key == "TOTAL") result.downloadTotal = std::stoull(value);
+    } catch (...) {
+      // Ignore malformed or partially replaced external progress records.
+    }
+  }
+  return result;
+}
+
+int startUpdateInstall(const fs::path& root, const std::string& latest) {
+#if defined(__linux__)
+  const fs::path script = root / "runtime/update/update.sh";
+  const fs::path out = updateStatusFile(root);
+  const fs::path progress = updateProgressFile(root);
+  if (!fs::is_regular_file(script)) return -1;
+  std::error_code ec;
+  fs::create_directories(out.parent_path(), ec);
+  if (ec) return -1;
+  fs::remove(out, ec);
+  fs::remove(progress, ec);
+  const pid_t pid = fork();
+  if (pid == 0) {
+    execl("/bin/bash", "bash", script.c_str(), "install", root.c_str(),
+          APP_VERSION, latest.c_str(), out.c_str(), static_cast<char*>(nullptr));
+    _exit(127);
+  }
+  return pid > 0 ? static_cast<int>(pid) : -1;
+#else
+  (void)root; (void)latest;
+  return -1;
+#endif
+}
+
 UpdateHelperResult runUpdateHelper(const fs::path& root, const std::string& mode,
                                    const std::string& latest = {}) {
   UpdateHelperResult result;
 #if defined(__linux__)
   const fs::path script = root / "runtime/update/update.sh";
-  const fs::path out = root / "cache/update/launcher_update_status.txt";
+  const fs::path out = updateStatusFile(root);
   std::error_code ec;
   fs::create_directories(out.parent_path(), ec);
   if (!fs::is_regular_file(script)) {
@@ -3806,17 +3891,7 @@ UpdateHelperResult runUpdateHelper(const fs::path& root, const std::string& mode
   }
   int childStatus = 0;
   waitpid(pid, &childStatus, 0);
-  std::ifstream in(out, std::ios::binary);
-  std::string line;
-  while (std::getline(in, line)) {
-    const auto pos = line.find('=');
-    if (pos == std::string::npos) continue;
-    const std::string key = line.substr(0, pos);
-    const std::string value = line.substr(pos + 1);
-    if (key == "STATUS") result.status = value;
-    else if (key == "LATEST") result.latest = value;
-    else if (key == "ERROR") result.error = value;
-  }
+  result = readUpdateHelperResult(root);
   result.ok = !result.status.empty() && result.status != "error" &&
               WIFEXITED(childStatus) && WEXITSTATUS(childStatus) == 0;
 #else
@@ -4471,7 +4546,7 @@ int main(int, char**) {
   };
 
   if (!folderSelectionRequired) reloadGameRoot();
-  log << "launcher start | build=V170-STEAMOS-UPSTREAM root=" << root.string()
+  log << "launcher start | build=V171-UPDATE-PROGRESS root=" << root.string()
       << " gameRoot=" << (folderSelectionRequired ? std::string("<select-required>") : gameRoot.string())
       << " config=" << configDiagnostic << " uiLanguage=" << uiLanguageCode(gUiLanguage) << '\n';
   log.flush();
@@ -5601,6 +5676,17 @@ int main(int, char**) {
   auto handlePointerDown = [&](float x, float y) {
     if (uiShell.sectionTransitionActive || uiShell.libraryPageTransitionActive) return;
     if (keyRemap.active) return;
+    if (updateUi.installing) return;
+    if (updateUi.prompt) {
+      if (pointInRect(x, y, updateYesRect())) {
+        updateUi.promptYes = true;
+        updateUi.pointerConfirmed = true;
+      } else if (pointInRect(x, y, updateNoRect())) {
+        updateUi.promptYes = false;
+        updateUi.pointerConfirmed = true;
+      }
+      return;
+    }
     if (search.active) {
       const SDL_Rect clearButton{430, 390, 190, 52};
       const SDL_Rect closeButton{660, 390, 190, 52};
@@ -5861,6 +5947,10 @@ int main(int, char**) {
   };
 
   auto checkForLauncherUpdate = [&]() {
+    if (updateUi.installing) return;
+    updateUi.installed = false;
+    updateUi.installPercent = 0;
+    updateUi.installStage.clear();
     status = uiWord("업데이트 확인 중...", "Checking for updates...", "アップデートを確認中...");
     const UpdateHelperResult result = runUpdateHelper(root, "check");
     updateUi.checked = true;
@@ -5882,21 +5972,56 @@ int main(int, char**) {
   };
 
   auto installLauncherUpdate = [&]() {
-    if (!updateUi.available || updateUi.latestVersion.empty()) return;
+    if (updateUi.installing || !updateUi.available || updateUi.latestVersion.empty()) return;
     status = uiWord("업데이트 다운로드 및 설치 중...", "Downloading and installing update...",
                     "アップデートをダウンロードしてインストール中...");
-    const UpdateHelperResult result = runUpdateHelper(root, "install", updateUi.latestVersion);
     updateUi.prompt = false;
-    if (result.ok && result.status == "installed") {
+    updateUi.installPid = startUpdateInstall(root, updateUi.latestVersion);
+    updateUi.installing = updateUi.installPid > 0;
+    updateUi.installPercent = 0;
+    updateUi.downloadedBytes = 0;
+    updateUi.downloadTotal = 0;
+    updateUi.installStage = "prepare";
+    updateUi.installed = false;
+    if (!updateUi.installing) {
+      updateUi.message = uiWord("업데이트 실행에 실패했습니다.", "Could not start the update.",
+                                "アップデートの開始に失敗しました。");
+      status = updateUi.message;
+    }
+  };
+
+  auto pollLauncherUpdate = [&]() {
+    if (!updateUi.installing) return;
+    const UpdateProgressSnapshot snapshot = readUpdateProgress(root);
+    if (!snapshot.stage.empty()) {
+      updateUi.installStage = snapshot.stage;
+      updateUi.installPercent = snapshot.percent;
+      updateUi.downloadedBytes = snapshot.downloadedBytes;
+      updateUi.downloadTotal = snapshot.downloadTotal;
+    }
+#if defined(__linux__)
+    int childStatus = 0;
+    const pid_t done = waitpid(static_cast<pid_t>(updateUi.installPid), &childStatus, WNOHANG);
+    if (done == 0) return;
+    updateUi.installing = false;
+    updateUi.installPid = -1;
+    const UpdateHelperResult result = readUpdateHelperResult(root);
+    if (done > 0 && WIFEXITED(childStatus) && WEXITSTATUS(childStatus) == 0 &&
+        result.status == "installed") {
       updateUi.available = false;
+      updateUi.installed = true;
+      updateUi.installStage = "done";
+      updateUi.installPercent = 100;
       updateUi.message = uiWord("설치 완료. 런처를 종료한 뒤 다시 실행해주세요.",
                                 "Update installed. Restart the launcher to use the new version.",
                                 "インストール完了。ランチャーを再起動してください。");
     } else {
-      updateUi.message = uiWord("업데이트 설치에 실패했습니다.", "Update installation failed.",
-                                "アップデートのインストールに失敗しました。");
+      updateUi.message = uiWord("업데이트 실패", "Update failed", "アップデート失敗") +
+                         (result.error.empty() ? std::string(": helper") : std::string(": ") + result.error);
+      updateUi.installStage = "failed";
     }
     status = updateUi.message;
+#endif
   };
 
   auto activateSettingsScreen = [&]() {
@@ -5962,6 +6087,7 @@ int main(int, char**) {
   };
   auto moveByDirection = [&](int dx, int dy) {
     if (uiShell.sectionTransitionActive || uiShell.libraryPageTransitionActive) return;
+    if (updateUi.installing) return;
     if (keyRemap.active || search.active || gameSettings.editingName) return;
     if (updateUi.prompt) {
       if (dx < 0) updateUi.promptYes = true;
@@ -6037,6 +6163,7 @@ int main(int, char**) {
 
   auto confirm = [&]() {
     if (uiShell.sectionTransitionActive || uiShell.libraryPageTransitionActive) return;
+    if (updateUi.installing) return;
     if (updateUi.prompt) {
       if (updateUi.promptYes) installLauncherUpdate();
       else updateUi.prompt = false;
@@ -6619,16 +6746,10 @@ int main(int, char**) {
         drawText(renderer, fonts.small, truncateText(fonts.small, updateUi.message, content.w - 360),
                  content.x + 320, content.y + 176, SDL_Color{152, 189, 215, 255});
       }
-      if (updateUi.prompt) {
+      if (updateUi.installed) {
         drawText(renderer, fonts.medium,
-                 uiWord("다운로드 후 설치하시겠습니까?", "Download and install this update?", "ダウンロードしてインストールしますか？"),
-                 content.x + content.w / 2, content.y + 232, WHITE, true);
-        SDL_Rect yesBtn{content.x + content.w / 2 - 170, content.y + 260, 150, 46};
-        SDL_Rect noBtn{content.x + content.w / 2 + 20, content.y + 260, 150, 46};
-        fillRoundedRect(renderer, yesBtn, 14, updateUi.promptYes ? SDL_Color{31, 102, 165, 230} : SDL_Color{11, 38, 61, 180});
-        fillRoundedRect(renderer, noBtn, 14, !updateUi.promptYes ? SDL_Color{31, 102, 165, 230} : SDL_Color{11, 38, 61, 180});
-        drawText(renderer, fonts.medium, uiWord("예", "Yes", "はい"), yesBtn.x + yesBtn.w / 2, yesBtn.y + 12, WHITE, true);
-        drawText(renderer, fonts.medium, uiWord("아니오", "No", "いいえ"), noBtn.x + noBtn.w / 2, noBtn.y + 12, WHITE, true);
+                 uiWord("설치 100% 완료", "Installation 100% complete", "インストール 100% 完了"),
+                 content.x + content.w / 2, content.y + 252, UI_GREEN, true);
       }
     }
 
@@ -6684,6 +6805,7 @@ int main(int, char**) {
     }
   };
   Uint64 nextIdleRedrawAt = 0;
+  Uint64 nextUpdateRedrawAt = 0;
   log << "power policy | idleRedrawMs=750 idlePollMs=50 activePollMs=8" << '\n';
   log.flush();
   while (running
@@ -6692,6 +6814,7 @@ int main(int, char**) {
 #endif
   ) {
     const Uint64 loopStartedAt = SDL_GetTicks64();
+    pollLauncherUpdate();
     bool sawUiEvent = false;
     SDL_Event event{};
     while (SDL_PollEvent(&event)) {
@@ -6705,6 +6828,8 @@ int main(int, char**) {
           SDL_GameControllerClose(controller);
           controller = openFirstController();
         }
+      } else if (updateUi.installing) {
+        // Keep the update modal responsive; reject navigation during install.
       } else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT &&
                  event.button.which != SDL_TOUCH_MOUSEID) {
         float logicalX = 0.0f;
@@ -6713,6 +6838,10 @@ int main(int, char**) {
         logicalY -= static_cast<float>(displayLayout.uiOffsetY);
         if (logicalY >= 0.0f && logicalY < static_cast<float>(HEIGHT))
           handlePointerDown(logicalX, logicalY);
+        if (updateUi.pointerConfirmed) {
+          updateUi.pointerConfirmed = false;
+          confirm();
+        }
       } else if (event.type == SDL_FINGERDOWN) {
         int windowW = displayLayout.logicalWidth;
         int windowH = displayLayout.logicalHeight;
@@ -6726,6 +6855,10 @@ int main(int, char**) {
         logicalY -= static_cast<float>(displayLayout.uiOffsetY);
         if (logicalY >= 0.0f && logicalY < static_cast<float>(HEIGHT))
           handlePointerDown(logicalX, logicalY);
+        if (updateUi.pointerConfirmed) {
+          updateUi.pointerConfirmed = false;
+          confirm();
+        }
       } else if (keyRemap.active && event.type == SDL_CONTROLLERBUTTONDOWN) {
         const int button = event.cbutton.button;
         if (keyRemap.stage == 0) {
@@ -6988,7 +7121,7 @@ int main(int, char**) {
     }
 
     const Uint64 now = SDL_GetTicks64();
-    if (!folderPicker.active && !gameSettings.active && !filterSort.active && !search.active && !exitModal && startHeld && selectHeld) {
+    if (!updateUi.installing && !folderPicker.active && !gameSettings.active && !filterSort.active && !search.active && !exitModal && startHeld && selectHeld) {
       selectTapCandidate = false;
       startTapCandidate = false;
       if (comboStarted == 0) comboStarted = now;
@@ -7071,7 +7204,8 @@ int main(int, char**) {
                                triggerL2Held || triggerR2Held;
     const Uint64 redrawNow = SDL_GetTicks64();
     const bool periodicIdleRedraw = redrawNow >= nextIdleRedrawAt;
-    const bool renderFrame = sawUiEvent || timedUiActive || periodicIdleRedraw;
+    const bool updateRedraw = updateUi.installing && redrawNow >= nextUpdateRedrawAt;
+    const bool renderFrame = sawUiEvent || timedUiActive || periodicIdleRedraw || updateRedraw;
     if (renderFrame) {
     uiShell.sidebarAnim += (sidebarTarget - uiShell.sidebarAnim) * 0.18f;
     if (std::abs(sidebarTarget - uiShell.sidebarAnim) < 0.01f) uiShell.sidebarAnim = sidebarTarget;
@@ -7150,6 +7284,86 @@ int main(int, char**) {
     SDL_RenderSetViewport(renderer, &uiViewport);
     drawSidebar();
     drawBottomHints();
+
+    if (updateUi.prompt || updateUi.installing) {
+      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+      fillRect(renderer, SDL_Rect{0, 0, WIDTH, HEIGHT}, SDL_Color{0, 0, 0, 174});
+      const SDL_Rect modal = updateModalRect();
+      fillRoundedRect(renderer, modal, 22, SDL_Color{7, 24, 41, 250});
+      strokeRoundedRect(renderer, modal, 22, SDL_Color{102, 184, 230, 138}, 2);
+      if (updateUi.prompt) {
+        drawText(renderer, fonts.normal,
+                 uiWord("업데이트 확인", "Update available", "アップデート確認"),
+                 WIDTH / 2, modal.y + 34, WHITE, true);
+        drawText(renderer, fonts.medium, "v" + updateUi.latestVersion,
+                 WIDTH / 2, modal.y + 91, UI_BLUE_SOFT, true);
+        drawText(renderer, fonts.medium,
+                 uiWord("다운로드 후 설치하시겠습니까?", "Download and install this update?",
+                        "ダウンロードしてインストールしますか？"),
+                 WIDTH / 2, modal.y + 127, WHITE, true);
+        const SDL_Rect yesBtn = updateYesRect();
+        const SDL_Rect noBtn = updateNoRect();
+        fillRoundedRect(renderer, yesBtn, 14, updateUi.promptYes ? SELECT_BG : SDL_Color{40, 53, 69, 230});
+        fillRoundedRect(renderer, noBtn, 14, !updateUi.promptYes ? SELECT_BG : SDL_Color{40, 53, 69, 230});
+        strokeRoundedRect(renderer, yesBtn, 14, updateUi.promptYes ? UI_BLUE_SOFT : BORDER, updateUi.promptYes ? 2 : 1);
+        strokeRoundedRect(renderer, noBtn, 14, !updateUi.promptYes ? UI_BLUE_SOFT : BORDER, !updateUi.promptYes ? 2 : 1);
+        const std::string yesLabel = uiWord("예", "Yes", "はい");
+        const std::string noLabel = uiWord("아니오", "No", "いいえ");
+        drawText(renderer, fonts.medium, yesLabel, yesBtn.x + yesBtn.w / 2,
+                 centeredTextY(fonts.medium, yesBtn, yesLabel), WHITE, true);
+        drawText(renderer, fonts.medium, noLabel, noBtn.x + noBtn.w / 2,
+                 centeredTextY(fonts.medium, noBtn, noLabel), WHITE, true);
+        drawText(renderer, fonts.small,
+                 uiWord("← → 선택  ·  A 확인  ·  B 취소", "← → Choose  ·  A Confirm  ·  B Cancel",
+                        "← → 選択  ·  A 決定  ·  B 戻る"),
+                 WIDTH / 2, modal.y + 263, SDL_Color{147, 182, 209, 255}, true);
+      } else {
+        drawText(renderer, fonts.normal,
+                 uiWord("업데이트 진행 중", "Updating RPG Maker Player", "アップデート中"),
+                 WIDTH / 2, modal.y + 33, WHITE, true);
+        drawText(renderer, fonts.small,
+                 uiWord("설치 버전", "Installing version", "インストールするバージョン") +
+                   ": v" + updateUi.latestVersion,
+                 WIDTH / 2, modal.y + 88, SDL_Color{162, 204, 232, 255}, true);
+        std::string stageLabel;
+        if (updateUi.installStage == "download")
+          stageLabel = uiWord("파일 다운로드 중", "Downloading files", "ファイルをダウンロード中");
+        else if (updateUi.installStage == "checksum")
+          stageLabel = uiWord("검증 파일 수신 중", "Downloading checksum", "チェックサム取得中");
+        else if (updateUi.installStage == "verify" || updateUi.installStage == "validate")
+          stageLabel = uiWord("파일 무결성 검사 중", "Verifying files", "ファイルを検証中");
+        else if (updateUi.installStage == "extract")
+          stageLabel = uiWord("압축 해제 중", "Extracting update", "展開中");
+        else if (updateUi.installStage == "install")
+          stageLabel = uiWord("업데이트 설치 중", "Installing update", "インストール中");
+        else
+          stageLabel = uiWord("업데이트 준비 중", "Preparing update", "準備中");
+        drawText(renderer, fonts.medium, stageLabel, WIDTH / 2, modal.y + 126, WHITE, true);
+        const SDL_Rect track = updateProgressTrackRect();
+        fillRoundedRect(renderer, track, 13, SDL_Color{18, 49, 75, 245});
+        const int filled = (track.w * std::clamp(updateUi.installPercent, 0, 100)) / 100;
+        if (filled > 0) {
+          SDL_Rect bar{track.x, track.y, std::max(8, filled), track.h};
+          fillRoundedRect(renderer, bar, 13, SDL_Color{53, 168, 240, 255});
+        }
+        strokeRoundedRect(renderer, track, 13, SDL_Color{109, 169, 214, 140}, 1);
+        drawText(renderer, fonts.normal, std::to_string(updateUi.installPercent) + "%",
+                 WIDTH / 2, modal.y + 209, UI_BLUE_SOFT, true);
+        if (updateUi.installStage == "download") {
+          const std::string sent = std::to_string(updateUi.downloadedBytes / (1024 * 1024)) + " MB";
+          const std::string total = updateUi.downloadTotal > 0
+            ? " / " + std::to_string(updateUi.downloadTotal / (1024 * 1024)) + " MB" : "";
+          drawText(renderer, fonts.small, sent + total, WIDTH / 2, modal.y + 254,
+                   SDL_Color{160, 193, 215, 255}, true);
+        } else {
+          drawText(renderer, fonts.small,
+                   uiWord("설치 중에는 런처를 종료하지 마세요",
+                          "Do not close the launcher during installation",
+                          "インストール中はランチャーを終了しないでください"),
+                   WIDTH / 2, modal.y + 254, SDL_Color{160, 193, 215, 255}, true);
+        }
+      }
+    }
 
     if (exitModal) {
       SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
@@ -7653,6 +7867,7 @@ int main(int, char**) {
 
     SDL_RenderPresent(renderer);
     nextIdleRedrawAt = SDL_GetTicks64() + 750;
+    nextUpdateRedrawAt = SDL_GetTicks64() + 90;
     }
 
     const Uint64 loopElapsed = SDL_GetTicks64() - loopStartedAt;

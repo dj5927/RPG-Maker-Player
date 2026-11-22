@@ -74,3 +74,8 @@ target_link_libraries(MKXP_Steam_Mouse_Bridge_Smoke PRIVATE
 target_compile_options(MKXP_Steam_Mouse_Bridge_Smoke PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 install(TARGETS MKXP_Launcher RUNTIME DESTINATION .)
+
+add_executable(MKXP_Update_Ui_Layout_Smoke tests/update_ui_layout_smoke.cpp)
+target_include_directories(MKXP_Update_Ui_Layout_Smoke PRIVATE src)
+target_link_libraries(MKXP_Update_Ui_Layout_Smoke PRIVATE PkgConfig::SDL2)
+target_compile_options(MKXP_Update_Ui_Layout_Smoke PRIVATE -Wall -Wextra -Wpedantic)
