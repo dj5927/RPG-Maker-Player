@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -36,6 +37,7 @@
 #include <signal.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
+#include <sys/prctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -1610,6 +1612,28 @@ void drawBrandLogo(SDL_Renderer* renderer, const SDL_Rect& box) {
 
 #if defined(__linux__)
 int gSingleInstanceLockFd = -1;
+volatile sig_atomic_t gSteamExitSignal = 0;
+void handleSteamExitSignal(int signalNumber) { gSteamExitSignal = signalNumber; }
+void installSteamExitHandlers() {
+  struct sigaction action{};
+  action.sa_handler = handleSteamExitSignal;
+  sigemptyset(&action.sa_mask);
+  sigaction(SIGTERM, &action, nullptr);
+  sigaction(SIGINT, &action, nullptr);
+  sigaction(SIGHUP, &action, nullptr);
+}
+bool steamExitRequested() { return gSteamExitSignal != 0; }
+void prepareGameChildProcess() {
+  setpgid(0, 0);
+  struct sigaction defaultAction{};
+  defaultAction.sa_handler = SIG_DFL;
+  sigemptyset(&defaultAction.sa_mask);
+  sigaction(SIGTERM, &defaultAction, nullptr);
+  sigaction(SIGINT, &defaultAction, nullptr);
+  sigaction(SIGHUP, &defaultAction, nullptr);
+  prctl(PR_SET_PDEATHSIG, SIGTERM);
+  if (getppid() == 1) _exit(143);
+}
 
 void drawFrontendStandby(SDL_Renderer* renderer) {
   SDL_RenderSetViewport(renderer, nullptr);
@@ -1763,8 +1787,8 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
   auto requestDirectExit = [&](const char* source) {
     if (terminateRequestedAt != 0) return;
     clearExitRequest();
-    kill(-pid, SIGTERM);
-    terminateRequestedAt = SDL_GetTicks64();
+    if (pid > 1) kill(-pid, SIGTERM);
+    terminateRequestedAt = std::max<Uint64>(1, SDL_GetTicks64());
     comboStarted = 0;
     waitRelease = true;
     logExit(std::string("exit combo | direct exit ") + source +
@@ -1775,7 +1799,13 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
   while (true) {
     const pid_t result = waitpid(pid, &childStatus, WNOHANG);
     if (result == pid) break;
-    if (result < 0) break;
+    if (result < 0) {
+      if (errno == EINTR) continue;
+      logExit("game child | waitpid error=" + std::to_string(errno));
+      break;
+    }
+    if (steamExitRequested() && terminateRequestedAt == 0)
+      requestDirectExit("steam-signal");
 
     SDL_PumpEvents();
     SDL_GameControllerUpdate();
@@ -1851,23 +1881,33 @@ int waitForGameChild(pid_t pid, SDL_Window* window, SDL_Renderer* renderer,
       if (mouseBridge.handleSdlTouchEvent(event, sdlTouchSource)) {
         logExit("mouse bridge | two-finger right-click source=" + sdlTouchSource);
       }
-      if (event.type == SDL_QUIT && terminateRequestedAt == 0) {
-        kill(-pid, SIGTERM);
-        terminateRequestedAt = SDL_GetTicks64();
-        logExit("exit combo | direct exit window-close pid=" + std::to_string(pid));
+      if (event.type == SDL_QUIT ||
+          (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE)) {
+        gSteamExitSignal = SIGTERM;
+        if (terminateRequestedAt == 0) requestDirectExit("steam-window-close");
       }
     }
 
     if (terminateRequestedAt != 0 &&
         SDL_GetTicks64() - terminateRequestedAt >= 2500) {
-      kill(-pid, SIGKILL);
-      terminateRequestedAt = SDL_GetTicks64();
+      if (pid > 1 && kill(-pid, SIGKILL) == 0)
+        logExit("steam exit | SIGKILL timeout fallback pid=" + std::to_string(pid));
+      terminateRequestedAt = std::max<Uint64>(1, SDL_GetTicks64());
     }
 
     SDL_Delay(16);
   }
 
   clearExitRequest();
+  if (pid > 1 && kill(-pid, 0) == 0) {
+    kill(-pid, SIGTERM);
+    for (int attempt = 0; attempt < 12 && kill(-pid, 0) == 0; ++attempt)
+      usleep(25000);
+    if (kill(-pid, 0) == 0) {
+      kill(-pid, SIGKILL);
+      logExit("game child | lingering process-group cleanup pid=" + std::to_string(pid));
+    }
+  }
   if (fallbackController) SDL_GameControllerClose(fallbackController);
   for (const int fd : evdevPads) close(fd);
   return childStatus;
@@ -2275,7 +2315,7 @@ NwjsProbeResult runNwjsCompatibilityProbe(const fs::path& root, const GameInfo& 
 
   const pid_t pid = fork();
   if (pid == 0) {
-    setpgid(0, 0);
+    prepareGameChildProcess();
     const int fd = open(probeLog.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd >= 0) {
       dup2(fd, STDOUT_FILENO);
@@ -3350,7 +3390,7 @@ int launchEasyRpgGame(const fs::path& launcherRoot, const GameInfo& game, std::s
 
   const pid_t pid = fork();
   if (pid == 0) {
-    setpgid(0, 0);
+    prepareGameChildProcess();
     applyGameLocaleEnvironment(game);
     const fs::path gameLogPath = launcherRoot / "logs" /
         ("game_" + game.folderName + "_easyrpg.log");
@@ -3452,7 +3492,7 @@ int launchRgssGame(const fs::path& launcherRoot, const GameInfo& game, std::stri
 
   const pid_t pid = fork();
   if (pid == 0) {
-    setpgid(0, 0);
+    prepareGameChildProcess();
     applyGameLocaleEnvironment(game);
     const fs::path gameLogPath = launcherRoot / "logs" /
         ("game_" + game.folderName + "_" + game.rubyRuntime + ".log");
@@ -3645,7 +3685,7 @@ int launchWebGame(const fs::path& launcherRoot, const GameInfo& game, std::strin
 
   const pid_t pid = fork();
   if (pid == 0) {
-    setpgid(0, 0);
+    prepareGameChildProcess();
     applyGameLocaleEnvironment(game);
     const fs::path gameLogPath = launcherRoot / "logs" /
         ("game_" + game.folderName + "_nwjs_" + game.nwjsRuntime + ".log");
@@ -3980,7 +4020,7 @@ int launchWolfExecutable(const fs::path& launcherRoot, const GameInfo& game, boo
 
   const pid_t pid = fork();
   if (pid == 0) {
-    setpgid(0, 0);
+    prepareGameChildProcess();
     applyGameLocaleEnvironment(game);
     const std::string mode = configMode ? "config" : "game";
     const fs::path gameLogPath = launcherRoot / "logs" /
@@ -4106,7 +4146,7 @@ int launchProtonCompatibilityGame(const fs::path& launcherRoot, const GameInfo& 
   }
   const pid_t pid = fork();
   if (pid == 0) {
-    setpgid(0, 0);
+    prepareGameChildProcess();
     applyGameLocaleEnvironment(game);
     const fs::path gameLogPath = launcherRoot / "logs" / ("game_" + game.folderName + "_proton.log");
     const int gameLogFd = open(gameLogPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -4235,6 +4275,9 @@ bool ensureRuntimeCompatRegistry(const fs::path& launcherRoot,
 } // namespace
 
 int main(int, char**) {
+#if defined(__linux__)
+  installSteamExitHandlers();
+#endif
   const fs::path root = executableRoot();
   gUiLanguage = detectUiLanguage();
   std::error_code ec;
@@ -4246,6 +4289,42 @@ int main(int, char**) {
   fs::create_directories(root / "runtime/rtp/vxace", ec);
   fs::create_directories(root / "runtime/rtp/fonts", ec);
   fs::create_directories(root / "runtime/_compat", ec);
+#if defined(__linux__)
+  // Headless process-lifecycle integration test. Never enabled in a normal
+  // SteamOS session; deliberately waits for the same SIGTERM Steam sends.
+  if (std::getenv("MKXP_TEST_STEAM_EXIT_CHILD")) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS | SDL_INIT_TIMER) != 0)
+      return 94;
+    if (std::getenv("MKXP_TEST_STEAM_EXIT_SDL_QUIT") ||
+        std::getenv("MKXP_TEST_STEAM_EXIT_SDL_WINDOW")) {
+      SDL_AddTimer(900, [](Uint32, void*) -> Uint32 {
+        SDL_Event event{};
+        if (std::getenv("MKXP_TEST_STEAM_EXIT_SDL_WINDOW")) {
+          event.type = SDL_WINDOWEVENT;
+          event.window.event = SDL_WINDOWEVENT_CLOSE;
+        } else {
+          event.type = SDL_QUIT;
+        }
+        SDL_PushEvent(&event);
+        return 0;
+      }, nullptr);
+    }
+    const pid_t testChild = fork();
+    if (testChild == 0) {
+      prepareGameChildProcess();
+      const char* command = std::getenv("MKXP_TEST_STEAM_EXIT_STUBBORN")
+        ? "trap '' TERM; sleep 60 & wait" : "sleep 60 & wait";
+      execl("/bin/sh", "sh", "-c", command, static_cast<char*>(nullptr));
+      _exit(127);
+    }
+    if (testChild < 0) { SDL_Quit(); return 95; }
+    const int status = waitForGameChild(testChild, nullptr, nullptr, FontSet{}, nullptr,
+                                        root / "cache/game_exit_request.flag");
+    (void)status;
+    SDL_Quit();
+    return steamExitRequested() ? 0 : 96;
+  }
+#endif
   const int legacyFontsMigrated = migrateOldSharedFonts(root);
   if (legacyFontsMigrated > 0)
     std::cerr << "[RPGMP-RTP] migrated existing fonts from assets/fonts: "
@@ -4364,7 +4443,7 @@ int main(int, char**) {
   };
 
   if (!folderSelectionRequired) reloadGameRoot();
-  log << "launcher start | build=V105 root=" << root.string()
+  log << "launcher start | build=V161-STEAM-EXIT-RC1 root=" << root.string()
       << " gameRoot=" << (folderSelectionRequired ? std::string("<select-required>") : gameRoot.string())
       << " config=" << configDiagnostic << " uiLanguage=" << uiLanguageCode(gUiLanguage) << '\n';
   log.flush();
@@ -5139,6 +5218,9 @@ int main(int, char**) {
     SDL_FlushEvents(SDL_KEYDOWN, SDL_CONTROLLERBUTTONUP);
     log << "frontend surface | child returned kind=wolf-config folder=" << games[selected].folderName << '\n';
     log.flush();
+#if defined(__linux__)
+    if (steamExitRequested()) running = false;
+#endif
   };
   auto drawNwjsDeepScanProgress = [&](const std::string& version, int index, int total) {
     SDL_RenderSetViewport(renderer, nullptr);
@@ -5984,6 +6066,14 @@ int main(int, char**) {
     historyEntry.launchCount += 1;
     trimPlayHistory(playHistory);
     savePlayHistory(root, playHistory);
+#if defined(__linux__)
+    if (steamExitRequested()) {
+      log << "steam exit | game stopped, leaving launcher without redraw" << '\n';
+      log.flush();
+      running = false;
+      return;
+    }
+#endif
     SDL_PumpEvents();
     SDL_FlushEvents(SDL_KEYDOWN, SDL_CONTROLLERBUTTONUP);
     startHeld = false;
@@ -6568,13 +6658,19 @@ int main(int, char**) {
   Uint64 nextIdleRedrawAt = 0;
   log << "power policy | idleRedrawMs=750 idlePollMs=50 activePollMs=8" << '\n';
   log.flush();
-  while (running) {
+  while (running
+#if defined(__linux__)
+         && !steamExitRequested()
+#endif
+  ) {
     const Uint64 loopStartedAt = SDL_GetTicks64();
     bool sawUiEvent = false;
     SDL_Event event{};
     while (SDL_PollEvent(&event)) {
       sawUiEvent = true;
-      if (event.type == SDL_QUIT) running = false;
+      if (event.type == SDL_QUIT ||
+          (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE))
+        running = false;
       else if (event.type == SDL_CONTROLLERDEVICEADDED && !controller) controller = openFirstController();
       else if (event.type == SDL_CONTROLLERDEVICEREMOVED && controller) {
         if (SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(controller)) == event.cdevice.which) {
@@ -7537,6 +7633,12 @@ int main(int, char**) {
   }
 
   if (controller) SDL_GameControllerClose(controller);
+#if defined(__linux__)
+  if (steamExitRequested()) {
+    log << "steam exit | shutdown requested signal=" << gSteamExitSignal << '\n';
+    log.flush();
+  }
+#endif
   closeFonts(fonts);
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);

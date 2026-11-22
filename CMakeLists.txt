@@ -61,6 +61,7 @@ add_executable(MKXP_Game_View_Smoke
 target_include_directories(MKXP_Game_View_Smoke PRIVATE src)
 target_compile_options(MKXP_Game_View_Smoke PRIVATE -Wall -Wextra -Wpedantic)
 
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/steam_mouse_bridge_smoke.cpp")
 add_executable(MKXP_Steam_Mouse_Bridge_Smoke
   tests/steam_mouse_bridge_smoke.cpp
   src/steam_mouse_bridge.cpp
@@ -71,4 +72,5 @@ target_link_libraries(MKXP_Steam_Mouse_Bridge_Smoke PRIVATE
   ${CMAKE_DL_LIBS}
 )
 target_compile_options(MKXP_Steam_Mouse_Bridge_Smoke PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 install(TARGETS MKXP_Launcher RUNTIME DESTINATION .)
